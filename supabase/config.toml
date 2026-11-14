@@ -1,0 +1,4 @@
+project_id = "tabi-base"
+
+[functions.tabi-push]
+verify_jwt = false

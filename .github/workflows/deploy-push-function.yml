@@ -1,0 +1,73 @@
+# 通知送信プログラム（tabi-push）を Supabase に載せるワークフロー
+#
+# 使い方：GitHub の「Actions」→「通知送信プログラムをSupabaseへ反映」→「Run workflow」
+#
+# ・初回だけ、通知用の鍵（VAPID鍵）を自動で作り、Supabase の秘密情報に直接登録します。
+#   秘密鍵は画面やリポジトリには一切出しません（公開鍵だけログに表示）。
+# ・2回目以降は鍵を作り直しません（作り直すと登録済みの端末に届かなくなるため）。
+#
+# 必要な Secrets（Settings → Secrets and variables → Actions）
+#   SUPABASE_ACCESS_TOKEN … Supabase のアカウント設定 → Access Tokens で作成したもの
+
+name: 通知送信プログラムをSupabaseへ反映
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["supabase/functions/tabi-push/**"]
+
+env:
+  PROJECT_REF: hortngwcijhjagwmcoxo # drops
+  FUNCTION_NAME: tabi-push
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.1
+
+      - name: トークンの確認
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ]; then
+            echo "::error::SUPABASE_ACCESS_TOKEN が登録されていません。Settings → Secrets and variables → Actions で登録してください。"
+            exit 1
+          fi
+
+      - name: 通知用の鍵（初回のみ作成）
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          if supabase secrets list --project-ref "$PROJECT_REF" | grep -q "VAPID_PRIVATE_KEY"; then
+            echo "通知用の鍵はすでに登録済みです（作り直しません）"
+          else
+            echo "通知用の鍵を新しく作ります"
+            keys=$(npx --yes web-push@3.6.7 generate-vapid-keys --json)
+            pub=$(echo "$keys" | jq -r .publicKey)
+            priv=$(echo "$keys" | jq -r .privateKey)
+            echo "::add-mask::$priv"
+            supabase secrets set --project-ref "$PROJECT_REF" \
+              VAPID_PUBLIC_KEY="$pub" VAPID_PRIVATE_KEY="$priv" \
+              VAPID_SUBJECT="https://konkora780-ux.github.io/tabi-base/"
+            echo "公開鍵: $pub"
+          fi
+
+      - name: 送信プログラムを反映
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --no-verify-jwt --use-api
+
+      - name: 動作確認（公開鍵が返るか）
+        run: |
+          sleep 5
+          res=$(curl -s -X POST "https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME" \
+            -H "Content-Type: application/json" -d '{"action":"vapid-key"}')
+          echo "$res"
+          echo "$res" | jq -e '.publicKey | length > 20' > /dev/null || { echo "::error::送信プログラムが正しく動いていません"; exit 1; }
