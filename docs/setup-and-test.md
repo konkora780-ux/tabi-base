@@ -19,11 +19,20 @@
 3. 「Success. No rows returned」または表が出れば成功
    - 既存の drops の表は変更しません。`tabi_` で始まる表・関数と、Cron ジョブ 2 つが追加されます。
 
-### A-4. ログイン用メールに「数字のコード」を載せる
-1. drops の「Authentication」→「Emails」（または Email Templates）→「Magic Link」
-2. 本文に次の 1 行を足して保存
+### A-4. ログイン用メールに「数字のコード」を載せる（GmailのSMTPを使う）
+Supabase標準のメール送信ではテンプレートを編集できず、送信数も1時間にごくわずかなため、ご自分のGmailから送る設定にします（無料）。
+1. Googleアカウント（https://myaccount.google.com/security）で「2段階認証プロセス」をオンにする
+2. https://myaccount.google.com/apppasswords でアプリ名「Supabase」と入れて作成 → 表示された16文字をコピー（この画面を閉じると二度と見られません）
+3. Supabase の drops →「Authentication」→「Emails」→「SMTP Settings」→ Enable Custom SMTP をオン
+   - Sender email: ご自分のGmailアドレス／Sender name: 旅ベース
+   - Host: `smtp.gmail.com`／Port: `465`
+   - Username: ご自分のGmailアドレス／Password: 2でコピーした16文字
+   - 「Save」
+4. 「Authentication」→「Rate Limits」で「emails per hour」を `30` 程度にして保存
+5. 「Emails」→「Templates」→「Magic link or OTP」の本文に次の1行を足して保存
    `<p>確認コード：<b>{{ .Token }}</b></p>`
-   - ⚠ この変更は drops を使う他のアプリのログインメールにも表示されます（リンクは残るので他アプリのログインは壊れません）。
+   - ⚠ drops を使う他のアプリのログインメールも、送信元がこのGmailになり、コードの行が表示されます（リンクは残ります）。
+   - アプリパスワードは秘密情報です。Claude やチャットには送らないでください。
 
 ### A-5. 送信プログラムを Supabase に載せる
 1. Supabase のアカウント設定 → Access Tokens（https://supabase.com/dashboard/account/tokens）で「Generate new token」→ 名前は `tabi-base` → コピー
