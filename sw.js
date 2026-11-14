@@ -1,8 +1,9 @@
 // 旅ベース Service Worker（通知の受信・画面を開く・オフライン用の保存）
-const VERSION = 'tabi-push-test-v1';
+const VERSION = 'tabi-app-v0.2.0';
 const SHELL = [
   './',
   './index.html',
+  './push-test.html',
   './manifest.webmanifest',
   './lib/supabase-2.117.3.js',
   './icons/icon-192.png',

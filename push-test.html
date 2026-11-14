@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>旅ベース 通知テスト</title>
+<meta name="theme-color" content="#0f6e8c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="旅ベース">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" href="./icons/icon-192.png">
+<style>
+  :root {
+    --bg: #f4f7f8; --card: #ffffff; --ink: #1c2b33; --sub: #5a6b74; --line: #d9e2e6;
+    --main: #0f6e8c; --main-ink: #ffffff; --ok: #1d7a46; --warn: #a15c00; --ng: #b3261e;
+    --ok-bg: #e6f4ec; --warn-bg: #fdf1e0; --ng-bg: #fbe9e8; --soft: #e8f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10181c; --card: #1a252b; --ink: #e8eef1; --sub: #a3b3bb; --line: #2c3a41;
+      --main: #4fb3d1; --main-ink: #062430; --ok: #6fd39a; --warn: #f0b35a; --ng: #ff8a80;
+      --ok-bg: #173225; --warn-bg: #352812; --ng-bg: #3a1a18; --soft: #1f3540;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10181c; --card: #1a252b; --ink: #e8eef1; --sub: #a3b3bb; --line: #2c3a41;
+    --main: #4fb3d1; --main-ink: #062430; --ok: #6fd39a; --warn: #f0b35a; --ng: #ff8a80;
+    --ok-bg: #173225; --warn-bg: #352812; --ng-bg: #3a1a18; --soft: #1f3540;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 17px; line-height: 1.6;
+    padding: env(safe-area-inset-top) 16px calc(24px + env(safe-area-inset-bottom));
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  header { padding: 18px 0 6px; }
+  h1 { font-size: 22px; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--sub); font-size: 15px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 14px 0; }
+  h2 { font-size: 18px; margin: 0 0 10px; display: flex; gap: 8px; align-items: center; }
+  h2 .num { background: var(--main); color: var(--main-ink); border-radius: 50%; width: 26px; height: 26px; display: inline-grid; place-items: center; font-size: 14px; flex: none; }
+  button {
+    font: inherit; font-weight: 600; width: 100%; min-height: 52px; border-radius: 12px; border: 0;
+    background: var(--main); color: var(--main-ink); margin: 6px 0; padding: 10px 14px; cursor: pointer;
+  }
+  button.sub { background: var(--soft); color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: default; }
+  input {
+    font: inherit; width: 100%; min-height: 50px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: 4px 0;
+  }
+  label { display: block; font-size: 15px; color: var(--sub); margin-top: 8px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .chk { list-style: none; padding: 0; margin: 0; }
+  .chk li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+  .chk li:last-child { border-bottom: 0; }
+  .tag { font-size: 14px; font-weight: 700; padding: 2px 10px; border-radius: 999px; white-space: nowrap; align-self: center; }
+  .tag.ok { background: var(--ok-bg); color: var(--ok); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .tag.ng { background: var(--ng-bg); color: var(--ng); }
+  .msg { padding: 10px 12px; border-radius: 10px; margin: 8px 0 0; font-size: 15px; }
+  .msg.ok { background: var(--ok-bg); color: var(--ok); }
+  .msg.warn { background: var(--warn-bg); color: var(--warn); }
+  .msg.ng { background: var(--ng-bg); color: var(--ng); }
+  .hint { color: var(--sub); font-size: 15px; margin: 6px 0; }
+  .banner { background: var(--ok-bg); color: var(--ok); border-radius: 12px; padding: 12px 14px; font-weight: 700; margin-top: 12px; }
+  .log { font-size: 15px; }
+  .log .item { border-top: 1px solid var(--line); padding: 10px 0; }
+  .log .item:first-child { border-top: 0; }
+  .log .t { font-weight: 700; }
+  .log .sm { color: var(--sub); font-size: 14px; }
+  .dev { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .hidden { display: none !important; }
+  details summary { cursor: pointer; color: var(--sub); font-size: 15px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>旅ベース 通知テスト</h1>
+    <p>通知がきちんと届くかを確かめるための試作版です</p>
+    <div id="fromPush" class="banner hidden">通知をタップしてアプリが開きました</div>
+  </header>
+
+  <section id="secConfig" class="hidden">
+    <h2>準備中</h2>
+    <p class="msg warn">接続の設定がまだ入っていません。開発者の設定が終わるまでお待ちください。</p>
+  </section>
+
+  <section>
+    <h2><span class="num">1</span>この端末の状態</h2>
+    <ul class="chk" id="envList"></ul>
+    <div id="installHelp" class="msg warn hidden"></div>
+  </section>
+
+  <section id="secLogin">
+    <h2><span class="num">2</span>ログイン</h2>
+    <div id="loginOut">
+      <label for="email">メールアドレス</label>
+      <input id="email" type="email" autocomplete="email" inputmode="email" placeholder="example@mail.com">
+      <button id="btnSendCode">確認コードをメールで受け取る</button>
+      <div id="codeBox" class="hidden">
+        <label for="code">メールに届いた数字のコード</label>
+        <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456">
+        <button id="btnVerify">ログインする</button>
+      </div>
+    </div>
+    <div id="loginIn" class="hidden">
+      <p class="hint">ログイン中：<b id="who"></b></p>
+      <button id="btnLogout" class="sub">ログアウト</button>
+    </div>
+    <div id="loginMsg"></div>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span>通知を受け取る準備</h2>
+    <button id="btnPermit">通知を許可して、この端末を登録する</button>
+    <div id="permitMsg"></div>
+    <details>
+      <summary>登録済みの端末</summary>
+      <div id="devices" class="log"></div>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span>テスト通知を送る</h2>
+    <button id="btnNow">今すぐ送る</button>
+    <p class="hint">送ったあと、ホーム画面に戻ったり画面をロックしたりして届くか確かめます。</p>
+    <label for="delay">時刻を指定して送る（Cronのテスト）</label>
+    <div class="row">
+      <input id="sendAt" type="time">
+      <button id="btnSchedule" class="sub">この時刻に予約</button>
+    </div>
+    <button id="btnReschedule" class="sub">予約を2分後に変更（古い予約は自動で取り消し）</button>
+    <div class="row">
+      <button id="btnRetry" class="sub">再試行テスト</button>
+      <button id="btnDouble" class="sub">二重送信テスト</button>
+    </div>
+    <div id="sendMsg"></div>
+  </section>
+
+  <section>
+    <h2><span class="num">5</span>送信の記録</h2>
+    <button id="btnRefresh" class="sub">記録を更新</button>
+    <p class="hint">「受付」はプッシュの配達業者が預かった段階で、端末に届いたとは限りません。端末が受け取ると「受信」になります。</p>
+    <div id="records" class="log"></div>
+  </section>
+
+  <section>
+    <h2><span class="num">6</span>この端末で受け取った通知</h2>
+    <div id="localLog" class="log"></div>
+  </section>
+
+  <p class="hint" style="text-align:center">試作版 v1 ・ 通知が必ず届くことを保証するものではありません</p>
+</main>
+
+<script src="./lib/supabase-2.117.3.js"></script>
+<script>
+// ===== 接続の設定（どちらも公開して問題ない値です。秘密鍵はここに入れません） =====
+const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
+const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
+const RESCHEDULE_KEY = 'test-reschedule';
+// ==========================================================================
+
+const $ = (id) => document.getElementById(id);
+const configured = !!SUPABASE_ANON_KEY;
+const sb = configured ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+}) : null;
+let swReg = null;
+let currentUser = null;
+
+function show(el, text, kind = 'ok') {
+  $(el).innerHTML = text ? `<div class="msg ${kind}">${text}</div>` : '';
+}
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmt(t) { return t ? new Date(t).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''; }
+
+const ua = navigator.userAgent;
+const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/.test(ua);
+const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function deviceLabel() {
+  if (isIOS) return 'iPhone/iPad';
+  if (isAndroid) return 'Android';
+  return 'パソコン';
+}
+
+function renderEnv() {
+  const perm = 'Notification' in window ? Notification.permission : 'none';
+  const items = [
+    ['端末の種類', deviceLabel(), 'ok'],
+    ['ホーム画面から起動', standalone ? 'はい' : 'いいえ', standalone ? 'ok' : (isIOS ? 'ng' : 'warn')],
+    ['通知の仕組み', ('PushManager' in window && 'serviceWorker' in navigator) ? '対応' : '未対応', ('PushManager' in window) ? 'ok' : 'ng'],
+    ['通知の許可', { granted: '許可済み', denied: '拒否されています', default: 'まだ', none: '未対応' }[perm], perm === 'granted' ? 'ok' : perm === 'denied' ? 'ng' : 'warn'],
+    ['オフライン用の準備', swReg ? '完了' : '準備中', swReg ? 'ok' : 'warn'],
+  ];
+  $('envList').innerHTML = items.map(([k, v, c]) => `<li><span>${k}</span><span class="tag ${c}">${v}</span></li>`).join('');
+
+  const help = $('installHelp');
+  if (isIOS && !standalone) {
+    help.innerHTML = 'iPhoneでは、ホーム画面に追加したアプリからでないと通知を受け取れません。<br>Safariの下の「共有」ボタン（□に↑）→「ホーム画面に追加」→ 追加した「旅ベース」アイコンから開き直してください。';
+    help.classList.remove('hidden');
+  } else if (perm === 'denied') {
+    help.innerHTML = '通知が拒否されています。端末の「設定」→「通知」→「旅ベース」で許可に変えてから、この画面を開き直してください。';
+    help.classList.remove('hidden');
+  } else {
+    help.classList.add('hidden');
+  }
+}
+
+// ---------- ログイン（メールの数字コード） ----------
+async function refreshAuth() {
+  if (!sb) return;
+  const { data } = await sb.auth.getSession();
+  currentUser = data.session?.user ?? null;
+  $('loginOut').classList.toggle('hidden', !!currentUser);
+  $('loginIn').classList.toggle('hidden', !currentUser);
+  $('who').textContent = currentUser?.email ?? '';
+  for (const id of ['btnPermit', 'btnNow', 'btnSchedule', 'btnReschedule', 'btnRetry', 'btnDouble', 'btnRefresh']) {
+    $(id).disabled = !currentUser;
+  }
+  if (currentUser) { loadRecords(); loadDevices(); }
+}
+
+$('btnSendCode').onclick = async () => {
+  const email = $('email').value.trim();
+  if (!email) return show('loginMsg', 'メールアドレスを入れてください', 'warn');
+  $('btnSendCode').disabled = true;
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  $('btnSendCode').disabled = false;
+  if (error) return show('loginMsg', 'コードを送れませんでした：' + esc(error.message), 'ng');
+  $('codeBox').classList.remove('hidden');
+  show('loginMsg', 'メールを送りました。届いた数字を入れてください（迷惑メールフォルダも確認してください）');
+  $('code').focus();
+};
+
+$('btnVerify').onclick = async () => {
+  const email = $('email').value.trim();
+  const token = $('code').value.replace(/\D/g, '');
+  if (!token) return show('loginMsg', 'コードを入れてください', 'warn');
+  $('btnVerify').disabled = true;
+  const { error } = await sb.auth.verifyOtp({ email, token, type: 'email' });
+  $('btnVerify').disabled = false;
+  if (error) return show('loginMsg', 'ログインできませんでした：' + esc(error.message), 'ng');
+  show('loginMsg', 'ログインしました');
+  refreshAuth();
+};
+
+$('btnLogout').onclick = async () => { await sb.auth.signOut(); show('loginMsg', ''); refreshAuth(); };
+
+// ---------- 通知の許可と端末登録 ----------
+function b64ToUint8(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function callFn(action, extra = {}) {
+  const { data } = await sb.auth.getSession();
+  const res = await fetch(FUNCTION_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: 'Bearer ' + (data.session?.access_token ?? SUPABASE_ANON_KEY),
+    },
+    body: JSON.stringify({ action, ...extra }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ('エラー ' + res.status));
+  return body;
+}
+
+async function registerDevice({ silent = false } = {}) {
+  if (!swReg) throw new Error('準備がまだ終わっていません。少し待ってからもう一度押してください');
+  const { publicKey } = await callFn('vapid-key');
+  if (!publicKey) throw new Error('サーバー側の通知の鍵がまだ設定されていません');
+  let sub = await swReg.pushManager.getSubscription();
+  const keyNow = sub?.options?.applicationServerKey;
+  if (sub && keyNow && btoa(String.fromCharCode(...new Uint8Array(keyNow))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') !== publicKey) {
+    await sub.unsubscribe(); sub = null; // 鍵が変わっていたら登録し直す
+  }
+  if (!sub) {
+    sub = await swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToUint8(publicKey) });
+  }
+  const j = sub.toJSON();
+  const { error } = await sb.rpc('tabi_register_push_subscription', {
+    p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth,
+    p_device_label: deviceLabel() + (standalone ? '（ホーム画面）' : '（ブラウザ）'), p_user_agent: ua,
+  });
+  if (error) throw new Error(error.message);
+  if (!silent) show('permitMsg', 'この端末を登録しました。次は「4 テスト通知を送る」へ進んでください');
+  loadDevices();
+}
+
+$('btnPermit').onclick = async () => {
+  try {
+    if (isIOS && !standalone) throw new Error('ホーム画面に追加したアイコンから開いてください（上の説明を見てください）');
+    if (!('Notification' in window)) throw new Error('この端末・ブラウザは通知に対応していません');
+    // iPhoneではボタンを押した直後にだけ許可の確認を出せる
+    const perm = await Notification.requestPermission();
+    renderEnv();
+    if (perm !== 'granted') throw new Error('通知が許可されませんでした');
+    await registerDevice();
+  } catch (e) { show('permitMsg', esc(e.message), 'ng'); }
+};
+
+async function loadDevices() {
+  const { data, error } = await sb.from('tabi_push_subscriptions')
+    .select('id, device_label, is_active, created_at, last_success_at, last_failure_at, failure_count')
+    .order('created_at', { ascending: false });
+  if (error) return;
+  $('devices').innerHTML = data.length ? data.map((d) => `<div class="item"><span class="t">${esc(d.device_label)}</span>
+    <span class="tag ${d.is_active ? 'ok' : 'ng'}">${d.is_active ? '有効' : '無効'}</span>
+    <div class="sm">登録 ${fmt(d.created_at)}${d.last_success_at ? '／最後の受付 ' + fmt(d.last_success_at) : ''}${d.failure_count ? '／連続失敗 ' + d.failure_count + '回' : ''}</div></div>`).join('')
+    : '<p class="hint">まだ登録されていません</p>';
+}
+
+// ---------- テスト送信 ----------
+async function sendNow(extra, label) {
+  try {
+    show('sendMsg', '送信しています…', 'warn');
+    const r = await callFn('send-now', extra);
+    const results = r.results || [];
+    if (!results.length) return show('sendMsg', '送り先の端末がありません。先に「3 通知を受け取る準備」をしてください', 'warn');
+    const acc = results.filter((x) => x.result === 'accepted').length;
+    const rt = results.filter((x) => x.result === 'retry').length;
+    show('sendMsg', `${label}：${results.length}台中 ${acc}台が受付${rt ? `、${rt}台が再試行待ち（約1分後に自動で再送）` : ''}。届いたかは「5 送信の記録」の「受信」で確認できます`, acc || rt ? 'ok' : 'ng');
+    setTimeout(loadRecords, 2500);
+  } catch (e) { show('sendMsg', esc(e.message), 'ng'); }
+}
+
+$('btnNow').onclick = () => sendNow({ title: '旅ベース テスト通知', body: '今すぐ送信のテストです（' + new Date().toLocaleTimeString('ja-JP') + '）' }, '今すぐ送信');
+$('btnRetry').onclick = () => sendNow({ title: '再試行テスト', body: '1回目はわざと失敗させ、自動の再送で届いた通知です', simulateFailure: true }, '再試行テスト');
+
+$('btnDouble').onclick = async () => {
+  try {
+    show('sendMsg', '送信しています…', 'warn');
+    const r = await callFn('double-dispatch-test');
+    const ok = r.firstRun + r.secondRun;
+    show('sendMsg', `同時に2回送信処理を動かしました。実際の送信：${r.firstRun}件＋${r.secondRun}件（端末の台数と同じなら二重送信は防げています）。通知が1つだけ表示されるか確認してください`, ok ? 'ok' : 'warn');
+    setTimeout(loadRecords, 2500);
+  } catch (e) { show('sendMsg', esc(e.message), 'ng'); }
+};
+
+function defaultTime() {
+  const d = new Date(Date.now() + 3 * 60000);
+  return d.toTimeString().slice(0, 5);
+}
+
+$('btnSchedule').onclick = async () => {
+  const v = $('sendAt').value;
+  if (!v) return show('sendMsg', '時刻を選んでください', 'warn');
+  const [h, m] = v.split(':').map(Number);
+  const at = new Date(); at.setHours(h, m, 0, 0);
+  if (at < new Date(Date.now() - 60000)) at.setDate(at.getDate() + 1);
+  const { error } = await sb.rpc('tabi_schedule_notification', {
+    p_title: '予約テスト通知', p_body: `${v} に予約した通知です`, p_send_at: at.toISOString(),
+    p_dedupe_key: RESCHEDULE_KEY, p_url: './?from=push',
+  });
+  if (error) return show('sendMsg', '予約できませんでした：' + esc(error.message), 'ng');
+  show('sendMsg', `${fmt(at)} に予約しました。アプリを閉じて待ってみてください（Cronは1分ごとに動くため、最大1分ほど遅れます）`);
+  loadRecords();
+};
+
+$('btnReschedule').onclick = async () => {
+  const at = new Date(Date.now() + 2 * 60000); at.setSeconds(0, 0);
+  const { error } = await sb.rpc('tabi_schedule_notification', {
+    p_title: '予約変更テスト', p_body: '変更後の予約だけが届けば正常です', p_send_at: at.toISOString(),
+    p_dedupe_key: RESCHEDULE_KEY, p_url: './?from=push',
+  });
+  if (error) return show('sendMsg', '変更できませんでした：' + esc(error.message), 'ng');
+  show('sendMsg', `${fmt(at)} に変更しました。前の予約は「取り消し」になります`);
+  loadRecords();
+};
+
+// ---------- 記録 ----------
+const N_STATUS = { scheduled: ['予約中', 'warn'], sending: ['送信中', 'warn'], done: ['送信処理完了', 'ok'], cancelled: ['取り消し', 'ng'] };
+const D_STATUS = { pending: ['送信待ち', 'warn'], sending: ['送信中', 'warn'], accepted: ['受付', 'ok'], retry: ['再試行待ち', 'warn'], failed: ['失敗', 'ng'], gone: ['端末の登録が無効', 'ng'], cancelled: ['取り消し', 'ng'] };
+
+async function loadRecords() {
+  if (!currentUser) return;
+  const { data, error } = await sb.from('tabi_notifications')
+    .select('id, title, send_at, status, created_at, tabi_notification_deliveries(status, attempts, http_status, last_error, accepted_at, received_at, clicked_at, next_attempt_at, tabi_push_subscriptions(device_label))')
+    .order('created_at', { ascending: false }).limit(15);
+  if (error) return show('records', '記録を読めませんでした：' + esc(error.message), 'ng');
+  $('records').innerHTML = data.length ? data.map((n) => {
+    const [ns, nc] = N_STATUS[n.status] || [n.status, 'warn'];
+    const ds = (n.tabi_notification_deliveries || []).map((d) => {
+      const [s, c] = D_STATUS[d.status] || [d.status, 'warn'];
+      const parts = [`<span class="tag ${c}">${s}</span>`];
+      if (d.received_at) parts.push('<span class="tag ok">受信</span>');
+      if (d.clicked_at) parts.push('<span class="tag ok">タップ</span>');
+      const info = [
+        d.tabi_push_subscriptions?.device_label || '端末',
+        `送信${d.attempts}回`,
+        d.accepted_at ? '受付 ' + fmt(d.accepted_at) : '',
+        d.received_at ? '受信 ' + fmt(d.received_at) : '',
+        d.status === 'retry' ? '次の再送 ' + fmt(d.next_attempt_at) : '',
+        d.last_error && d.status !== 'accepted' ? '理由：' + esc(d.last_error) : '',
+      ].filter(Boolean).join('／');
+      return `<div class="dev">${parts.join('')}</div><div class="sm">${esc(info)}</div>`;
+    }).join('');
+    const cancel = n.status === 'scheduled' ? `<button class="sub" onclick="cancelN('${n.id}')">この予約を取り消す</button>` : '';
+    return `<div class="item"><span class="t">${esc(n.title)}</span> <span class="tag ${nc}">${ns}</span>
+      <div class="sm">送信予定 ${fmt(n.send_at)}</div>${ds}${cancel}</div>`;
+  }).join('') : '<p class="hint">まだ記録はありません</p>';
+}
+
+async function cancelN(id) {
+  const { error } = await sb.rpc('tabi_cancel_notification', { p_id: id });
+  if (error) return show('sendMsg', '取り消せませんでした：' + esc(error.message), 'ng');
+  show('sendMsg', '予約を取り消しました');
+  loadRecords();
+}
+$('btnRefresh').onclick = loadRecords;
+
+// ---------- 端末内の受信記録 ----------
+function loadLocalLog() {
+  const r = indexedDB.open('tabi-push-test', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('log', { keyPath: 'key' });
+  r.onsuccess = () => {
+    const db = r.result;
+    const req = db.transaction('log').objectStore('log').getAll();
+    req.onsuccess = () => {
+      const rows = req.result.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 20);
+      const K = { received: '受信', clicked: 'タップ', subchange: '登録変更' };
+      $('localLog').innerHTML = rows.length ? rows.map((x) => `<div class="item"><span class="tag ok">${K[x.kind] || x.kind}</span> ${esc(x.title)}<div class="sm">${fmt(x.at)}</div></div>`).join('')
+        : '<p class="hint">まだありません</p>';
+    };
+  };
+}
+
+// ---------- 起動 ----------
+(async () => {
+  $('sendAt').value = defaultTime();
+  if (new URLSearchParams(location.search).get('from') === 'push') $('fromPush').classList.remove('hidden');
+  if (!configured) $('secConfig').classList.remove('hidden');
+  if ('serviceWorker' in navigator) {
+    try {
+      swReg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+      await navigator.serviceWorker.ready;
+    } catch (e) { console.error(e); }
+  }
+  renderEnv();
+  loadLocalLog();
+  if (!configured) {
+    for (const b of document.querySelectorAll('button')) b.disabled = true;
+    return;
+  }
+  sb.auth.onAuthStateChange(() => setTimeout(refreshAuth, 0));
+  await refreshAuth();
+  // 許可済みの端末は、開くたびに登録情報を最新にしておく（登録が変わっていても届くように）
+  if (currentUser && 'Notification' in window && Notification.permission === 'granted') {
+    registerDevice({ silent: true }).catch(() => {});
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { loadLocalLog(); loadRecords(); }
+  });
+})();
+</script>
+</body>
+</html>
