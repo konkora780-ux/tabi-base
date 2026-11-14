@@ -162,7 +162,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.2.1';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -176,6 +176,8 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 let swReg = null;
 let user = null;
+let hasSub = false; // この端末が通知先として登録されているか
+let regDone = false; // この画面を開いてから通知先の登録を済ませたか
 
 const ua = navigator.userAgent;
 const isIOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -197,7 +199,7 @@ function friendlyError(e) {
 function pushState() {
   if (!('Notification' in window) || !('PushManager' in window)) return ['使えない端末', 'ng'];
   if (isIOS && !standalone) return ['ホーム画面から開く必要あり', 'warn'];
-  if (Notification.permission === 'granted') return ['オン', 'ok'];
+  if (Notification.permission === 'granted') return hasSub ? ['オン', 'ok'] : ['この端末は未登録', 'warn'];
   if (Notification.permission === 'denied') return ['拒否されています', 'ng'];
   return ['要確認', 'warn'];
 }
@@ -322,6 +324,7 @@ $('btnPush').onclick = async () => {
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') throw new Error('通知が許可されませんでした。端末の「設定」→「通知」→「旅ベース」で許可できます');
     await registerDevice();
+    await checkSub();
     show('pushMsg', 'この端末で通知を受け取れるようにしました。「テスト通知を送る」で確かめられます');
   } catch (e) { show('pushMsg', esc(friendlyError(e)), 'ng'); }
   renderStatus(); renderTodo();
@@ -367,6 +370,7 @@ $('btnLogout').onclick = async () => {
   if (!confirmLogout()) return;
   $('btnLogout').disabled = true;
   await clearDeviceData();
+  hasSub = false; regDone = false;
   await sb.auth.signOut({ scope: 'local' });
   $('btnLogout').disabled = false;
   show('loginMsg', 'ログアウトしました。この端末の旅程と通知の登録を消しました');
@@ -383,10 +387,18 @@ function confirmLogout() {
 }
 
 // ---------- 起動 ----------
+async function checkSub() {
+  try { hasSub = !!(swReg && await swReg.pushManager.getSubscription()); } catch { hasSub = false; }
+}
 async function refreshUser() {
   const { data } = await sb.auth.getSession();
   user = data.session?.user ?? null;
   $('who').textContent = user?.email ?? '';
+  // ログインした直後、通知を許可済みならこの端末を通知先に登録し直す（ログアウトで消しているため）
+  if (user && !regDone && swReg && 'Notification' in window && Notification.permission === 'granted' && navigator.onLine) {
+    try { await registerDevice(); regDone = true; } catch (e) { console.warn(e); }
+  }
+  await checkSub();
   route();
 }
 sb.auth.onAuthStateChange(() => setTimeout(refreshUser, 0));
@@ -412,11 +424,8 @@ sb.auth.onAuthStateChange(() => setTimeout(refreshUser, 0));
     } catch (e) { console.error(e); }
   }
   $('btnUpdate').onclick = () => location.reload();
-  await refreshUser();
-  // 通知を許可済みの端末は、開くたびに登録を最新にする（通知先が変わっても届くように）
-  if (user && 'Notification' in window && Notification.permission === 'granted' && navigator.onLine) {
-    registerDevice().catch(() => {});
-  }
+  if (swReg) await navigator.serviceWorker.ready;
+  await refreshUser(); // ログイン済み＋通知許可済みなら、ここで通知先の登録も最新になる
 })();
 </script>
 </body>

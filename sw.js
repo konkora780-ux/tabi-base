@@ -1,5 +1,5 @@
 // 旅ベース Service Worker（通知の受信・画面を開く・オフライン用の保存）
-const VERSION = 'tabi-app-v0.2.0';
+const VERSION = 'tabi-app-v0.2.1';
 const SHELL = [
   './',
   './index.html',
