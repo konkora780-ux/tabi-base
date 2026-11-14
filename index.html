@@ -164,7 +164,9 @@
     </section>
     <section>
       <h2>旅程</h2>
-      <p class="hint">移動や予定の登録は、次の更新で追加します。</p>
+      <div id="tripSegs" class="list"></div>
+      <div id="tripAddBtns"></div>
+      <p class="hint">予定（観光・食事・宿など）の登録は、次の更新で追加します。</p>
     </section>
     <section>
       <h2>参加者</h2>
@@ -201,6 +203,43 @@
     </section>
   </div>
 
+  <!-- 移動の登録・編集 -->
+  <div id="viewSeg" class="hidden">
+    <a class="back" id="segBack" href="#/trips">‹ 旅に戻る</a>
+    <section>
+      <h2 id="segTitle">移動を登録</h2>
+      <label for="sMode">移動手段</label>
+      <select id="sMode"></select>
+      <div id="segFields"></div>
+      <div class="two">
+        <div><label for="sDep" id="sDepLabel">出発日時</label><input id="sDep" type="datetime-local"></div>
+        <div><label for="sArr" id="sArrLabel">到着日時</label><input id="sArr" type="datetime-local"></div>
+      </div>
+      <details id="tzBox"><summary class="hint">時間帯（海外の移動のとき）</summary>
+        <label for="sDepTz">出発地の時間帯</label><select id="sDepTz"></select>
+        <label for="sArrTz">到着地の時間帯</label><select id="sArrTz"></select>
+      </details>
+      <label for="sMemo">メモ</label>
+      <textarea id="sMemo" rows="2" maxlength="2000"></textarea>
+      <label for="sStatus">状態</label>
+      <select id="sStatus">
+        <option value="scheduled">予定どおり</option>
+        <option value="cancelled">運休・キャンセル（乗らない）</option>
+      </select>
+    </section>
+    <section>
+      <h2>予約番号・確認コード</h2>
+      <p class="hint">ここに入れた番号は別の場所に保管し、見られる人を限定します。通知の本文には入りません。</p>
+      <label for="sResv">予約番号</label>
+      <input id="sResv" maxlength="200" autocomplete="off">
+      <label for="sConf">確認コード</label>
+      <input id="sConf" maxlength="200" autocomplete="off">
+    </section>
+    <button id="btnSaveSeg">保存する</button>
+    <button id="btnDeleteSeg" class="danger hidden">この移動を削除する</button>
+    <div id="segMsg"></div>
+  </div>
+
   <!-- 設定 -->
   <div id="viewSettings" class="hidden">
     <section>
@@ -233,7 +272,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -310,14 +349,14 @@ function renderTodo() {
 }
 
 // ---------- 画面の切り替え ----------
-const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit' };
+const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit', seg: 'viewSeg' };
 function route() {
-  const [v, arg] = (location.hash.replace('#/', '') || 'home').split('/');
+  const [v, arg, arg2] = (location.hash.replace('#/', '') || 'home').split('/');
   const view = !user ? 'login' : (VIEWS[v] && v !== 'login' ? v : 'home');
   for (const [name, id] of Object.entries(VIEWS)) $(id).classList.add('hidden');
   $(VIEWS[view]).classList.remove('hidden');
   $('tabs').classList.toggle('hidden', !user);
-  const tab = view.startsWith('trip') ? 'trips' : view;
+  const tab = (view.startsWith('trip') || view === 'seg') ? 'trips' : view;
   for (const a of document.querySelectorAll('nav.tabs a')) a.classList.toggle('on', a.dataset.view === tab);
   renderStatus(); renderTodo();
   window.scrollTo(0, 0);
@@ -327,6 +366,7 @@ function route() {
   if (view === 'trip') loadTrip(arg);
   if (view === 'trip-new') openTripForm(null);
   if (view === 'trip-edit') openTripForm(arg);
+  if (view === 'seg') openSegForm(arg, arg2);
 }
 window.addEventListener('hashchange', route);
 window.addEventListener('online', renderStatus);
@@ -413,6 +453,7 @@ async function loadTrip(id) {
   markSynced();
   const me = (members || []).find((m) => m.user_id === user.id);
   currentTrip = { ...t, myRole: me?.role };
+  loadSegs(t, ['owner', 'editor'].includes(me?.role));
   $('tripTitle').textContent = t.name;
   $('tripInfo').innerHTML = `<dl class="info">
     <dt>日程</dt><dd>${fmtRange(t)}</dd>
@@ -507,6 +548,198 @@ $('btnSaveTrip').onclick = async () => {
   } finally {
     $('btnSaveTrip').disabled = false;
   }
+};
+
+// ---------- 移動 ----------
+// 移動手段ごとの入力欄（列名: 表示名）。details.* は移動手段ごとの追加項目
+const MODES = {
+  flight:        { name: '飛行機', icon: '✈️', dep: '出発日時', arr: '到着日時',
+    fields: [['carrier', '航空会社'], ['service_name', '便名'], ['from_name', '出発空港'], ['to_name', '到着空港'], ['details.terminal', 'ターミナル'], ['platform', '搭乗ゲート'], ['seat', '座席'], ['details.security', '保安検査の締切（例 13:30）']] },
+  shinkansen:    { name: '新幹線・特急', icon: '🚄', dep: '発車日時', arr: '到着日時',
+    fields: [['service_name', '列車名・号数（例 はやぶさ12号）'], ['from_name', '乗る駅'], ['to_name', '降りる駅'], ['platform', '番線'], ['car_no', '号車'], ['seat', '座席'], ['details.seat_type', '指定席／自由席']] },
+  local_train:   { name: '在来線・私鉄・地下鉄', icon: '🚃', dep: '発車日時', arr: '到着日時',
+    fields: [['service_name', '路線名'], ['details.bound_for', '行き先（○○行き）'], ['from_name', '乗る駅'], ['to_name', '降りる駅'], ['platform', '番線'], ['details.transfer', '乗換駅']] },
+  sleeper_train: { name: '寝台列車・観光列車', icon: '🛏️', dep: '発車日時', arr: '到着日時',
+    fields: [['service_name', '列車名'], ['from_name', '乗る駅'], ['to_name', '降りる駅'], ['car_no', '号車'], ['seat', '部屋・座席']] },
+  highway_bus:   { name: '高速バス・夜行バス', icon: '🚌', dep: '出発日時', arr: '到着日時',
+    fields: [['carrier', '会社名'], ['service_name', '便名'], ['from_name', '乗る場所'], ['to_name', '降りる場所'], ['platform', 'のりば番号'], ['seat', '座席']] },
+  route_bus:     { name: '路線バス', icon: '🚏', dep: '発車日時', arr: '到着日時',
+    fields: [['service_name', '系統・行き先'], ['from_name', '乗るバス停'], ['to_name', '降りるバス停'], ['platform', '乗り場']] },
+  taxi:          { name: 'タクシー・配車アプリ', icon: '🚕', dep: '予約時刻', arr: '到着予定',
+    fields: [['from_name', '乗車場所'], ['to_name', '行き先'], ['carrier', '会社名']] },
+  rental_car:    { name: 'レンタカー', icon: '🚗', dep: '受け取り日時', arr: '返却日時',
+    fields: [['carrier', '会社'], ['from_name', '受け取り店舗'], ['to_name', '返却店舗']] },
+  own_car:       { name: '自家用車', icon: '🚙', dep: '出発日時', arr: '到着日時',
+    fields: [['from_name', '出発地'], ['to_name', '目的地'], ['details.parking', '駐車場']] },
+  ferry:         { name: 'フェリー・船・高速船', icon: '⛴️', dep: '出港日時', arr: '入港日時',
+    fields: [['service_name', '航路'], ['from_name', '乗る港'], ['to_name', '降りる港'], ['platform', '乗り場'], ['seat', '船室・座席'], ['details.vehicle', '車両の有無']] },
+  ropeway:       { name: 'ロープウェイ・ケーブルカー', icon: '🚡', dep: '発車日時', arr: '到着日時',
+    fields: [['service_name', '名前'], ['from_name', '乗り場'], ['to_name', '降り場']] },
+  walk_bike:     { name: '徒歩・自転車・シェアサイクル', icon: '🚶', dep: '出発日時', arr: '到着日時',
+    fields: [['from_name', '出発地'], ['to_name', '目的地'], ['details.duration', '目安時間（例 15分）']] },
+  other:         { name: '自由入力', icon: '📍', dep: '出発日時', arr: '到着日時',
+    fields: [['service_name', '名前'], ['from_name', '出発地点'], ['to_name', '到着地点']] },
+};
+
+// 時間帯つきの日時 ⇔ 世界共通の基準時刻(UTC)
+function tzOffsetMs(utcMs, tz) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(new Date(utcMs)).reduce((o, p) => (o[p.type] = p.value, o), {});
+  const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  return asUtc - Math.floor(utcMs / 1000) * 1000;
+}
+function localToUtcIso(local, tz) { // 'YYYY-MM-DDTHH:MM' をその時間帯の時刻として解釈
+  if (!local) return null;
+  const [d, t] = local.split('T'); const [y, mo, da] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number);
+  const wall = Date.UTC(y, mo - 1, da, h, mi);
+  let utc = wall - tzOffsetMs(wall, tz);
+  utc = wall - tzOffsetMs(utc, tz); // 夏時間の切り替わり付近のずれを補正
+  return new Date(utc).toISOString();
+}
+function utcToLocalInput(iso, tz) {
+  if (!iso) return '';
+  const ms = new Date(iso).getTime();
+  return new Date(ms + tzOffsetMs(ms, tz)).toISOString().slice(0, 16);
+}
+function fmtLocal(iso, tz, withDate = true) {
+  if (!iso) return '';
+  const o = { timeZone: tz, hour: '2-digit', minute: '2-digit' };
+  if (withDate) Object.assign(o, { month: 'numeric', day: 'numeric', weekday: 'short' });
+  return new Intl.DateTimeFormat('ja-JP', o).format(new Date(iso));
+}
+function tzLabel(tz, tripTz) { return tz && tz !== tripTz ? `（${tzName(tz)}時間）` : ''; }
+function getField(row, key) { return key.startsWith('details.') ? (row.details || {})[key.slice(8)] : row[key]; }
+
+function segSummary(sg) {
+  const m = MODES[sg.mode] || MODES.other;
+  const title = [sg.carrier, sg.service_name].filter(Boolean).join(' ') || m.name;
+  const route = [sg.from_name, sg.to_name].filter(Boolean).join(' → ');
+  const extra = [sg.platform && (sg.mode === 'flight' ? 'ゲート' + sg.platform : sg.platform + (/[番線]$/.test(sg.platform) ? '' : '番線')),
+    sg.car_no && sg.car_no + (/号車$/.test(sg.car_no) ? '' : '号車'), sg.seat].filter(Boolean).join('・');
+  return { m, title, route, extra };
+}
+
+async function loadSegs(trip, canEdit) {
+  $('tripAddBtns').innerHTML = canEdit ? `<a class="btn" href="#/seg/${trip.id}/new">＋ 移動を登録する</a>` : '';
+  const { data, error } = await sb.from('tabi_segments').select('*').eq('trip_id', trip.id).is('deleted_at', null)
+    .order('depart_at', { ascending: true, nullsFirst: false });
+  if (error) { $('tripSegs').innerHTML = `<div class="msg ng">${esc(friendlyError(error))}</div>`; return; }
+  // 予約番号は「表示」を押したときだけ取りに行く。ここでは件数（あるかどうか）も見られる人だけに分かる
+  const { data: secs } = await sb.from('tabi_trip_secrets').select('target_id').eq('trip_id', trip.id).eq('target_type', 'segment');
+  const hasSecret = new Set((secs || []).map((x) => x.target_id));
+  $('tripSegs').innerHTML = data.length ? data.map((sg) => {
+    const { m, title, route, extra } = segSummary(sg);
+    const time = sg.depart_at ? `${fmtLocal(sg.depart_at, sg.depart_tz)}${tzLabel(sg.depart_tz, trip.timezone)}${sg.arrive_at ? ' → ' + fmtLocal(sg.arrive_at, sg.arrive_tz, false) + tzLabel(sg.arrive_tz, trip.timezone) : ''}` : '日時未定';
+    const cancelled = sg.status === 'cancelled' ? ' <span class="tag ng">運休・キャンセル</span>' : '';
+    const body = `<div class="t">${m.icon} ${esc(title)}${cancelled}</div><div class="sm">${esc(time)}</div>
+      ${route ? `<div>${esc(route)}</div>` : ''}${extra ? `<div class="sm">${esc(extra)}</div>` : ''}`;
+    const secretBtn = hasSecret.has(sg.id) ? `<button class="sub" onclick="showSecret(this,'${sg.id}')">予約番号を表示</button>` : '';
+    return `<div class="item">${canEdit ? `<a href="#/seg/${trip.id}/${sg.id}" style="color:inherit;text-decoration:none;display:block">${body}</a>` : body}${secretBtn}</div>`;
+  }).join('') : '<p class="hint">まだ移動が登録されていません</p>';
+}
+
+async function showSecret(btn, segId) {
+  const { data, error } = await sb.from('tabi_trip_secrets').select('kind, value').eq('target_type', 'segment').eq('target_id', segId);
+  if (error || !data.length) { btn.textContent = '見られません'; return; }
+  const K = { reservation: '予約番号', confirmation: '確認コード', other: 'その他' };
+  btn.outerHTML = `<div class="msg ok">${data.map((x) => `${K[x.kind] || ''}：<b>${esc(x.value)}</b>`).join('<br>')}</div>`;
+}
+
+let segEditing = null;
+function fillTzSelect(id, selected) {
+  const list = TZ_LIST.some(([k]) => k === selected) ? TZ_LIST : [...TZ_LIST, [selected, selected]];
+  $(id).innerHTML = list.map(([k, n]) => `<option value="${esc(k)}"${k === selected ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+function renderSegFields(row) {
+  const m = MODES[$('sMode').value] || MODES.other;
+  $('sDepLabel').textContent = m.dep; $('sArrLabel').textContent = m.arr;
+  $('segFields').innerHTML = m.fields.map(([k, label]) =>
+    `<label for="sf_${k}">${esc(label)}</label><input id="sf_${k}" data-key="${k}" maxlength="100" value="${esc(getField(row || {}, k) || '')}">`).join('');
+}
+function collectSegFields() {
+  const out = { carrier: null, service_name: null, from_name: null, to_name: null, platform: null, car_no: null, seat: null };
+  const details = {};
+  for (const el of document.querySelectorAll('#segFields input')) {
+    const v = el.value.trim() || null; const k = el.dataset.key;
+    if (k.startsWith('details.')) { if (v) details[k.slice(8)] = v; } else out[k] = v;
+  }
+  out.details = details;
+  return out;
+}
+async function openSegForm(tripId, segId) {
+  show('segMsg', '');
+  $('segBack').href = '#/trip/' + tripId;
+  const { data: trip } = await sb.from('tabi_trips').select('id, timezone, start_date').eq('id', tripId).maybeSingle();
+  if (!trip) return show('segMsg', '旅が見つかりません', 'ng');
+  $('sMode').innerHTML = Object.entries(MODES).map(([k, m]) => `<option value="${k}">${m.icon} ${m.name}</option>`).join('');
+  let row = null; let secrets = [];
+  if (segId && segId !== 'new') {
+    const r = await sb.from('tabi_segments').select('*').eq('id', segId).maybeSingle();
+    row = r.data;
+    if (!row) return show('segMsg', '移動が見つかりません', 'ng');
+    secrets = (await sb.from('tabi_trip_secrets').select('id, kind, value').eq('target_type', 'segment').eq('target_id', segId)).data || [];
+  }
+  segEditing = { tripId, id: row?.id || null, version: row?.version, secrets, tripTz: trip.timezone };
+  $('segTitle').textContent = row ? '移動を編集' : '移動を登録';
+  $('sMode').value = row?.mode || 'shinkansen';
+  renderSegFields(row);
+  fillTzSelect('sDepTz', row?.depart_tz || trip.timezone);
+  fillTzSelect('sArrTz', row?.arrive_tz || trip.timezone);
+  $('tzBox').open = !!row && (row.depart_tz !== trip.timezone || row.arrive_tz !== trip.timezone);
+  $('sDep').value = row ? utcToLocalInput(row.depart_at, row.depart_tz) : `${trip.start_date}T09:00`;
+  $('sArr').value = row ? utcToLocalInput(row.arrive_at, row.arrive_tz) : '';
+  $('sMemo').value = row?.memo || '';
+  $('sStatus').value = row?.status || 'scheduled';
+  $('sResv').value = secrets.find((x) => x.kind === 'reservation')?.value || '';
+  $('sConf').value = secrets.find((x) => x.kind === 'confirmation')?.value || '';
+  $('btnDeleteSeg').classList.toggle('hidden', !row);
+}
+$('sMode').onchange = () => renderSegFields(Object.assign({}, collectSegFields(), { details: collectSegFields().details }));
+
+async function saveSecret(tripId, segId, kind, value) {
+  const cur = segEditing.secrets.find((x) => x.kind === kind);
+  if (!value && cur) return sb.from('tabi_trip_secrets').delete().eq('id', cur.id);
+  if (value && cur && cur.value !== value) return sb.from('tabi_trip_secrets').update({ value }).eq('id', cur.id);
+  if (value && !cur) return sb.from('tabi_trip_secrets').insert({ trip_id: tripId, target_type: 'segment', target_id: segId, kind, value });
+  return { error: null };
+}
+$('btnSaveSeg').onclick = async () => {
+  const depTz = $('sDepTz').value, arrTz = $('sArrTz').value;
+  const row = { mode: $('sMode').value, ...collectSegFields(),
+    depart_at: localToUtcIso($('sDep').value, depTz), depart_tz: depTz,
+    arrive_at: localToUtcIso($('sArr').value, arrTz), arrive_tz: arrTz,
+    memo: $('sMemo').value.trim() || null, status: $('sStatus').value };
+  if (!row.depart_at) return show('segMsg', MODES[row.mode].dep + 'を入れてください', 'warn');
+  if (row.arrive_at && row.arrive_at < row.depart_at) return show('segMsg', MODES[row.mode].arr + 'は' + MODES[row.mode].dep + 'より後にしてください', 'warn');
+  if (!navigator.onLine) return show('segMsg', 'オフライン中は保存できません', 'warn');
+  $('btnSaveSeg').disabled = true;
+  try {
+    let id = segEditing.id;
+    if (!id) {
+      const { data, error } = await sb.from('tabi_segments').insert({ ...row, trip_id: segEditing.tripId }).select('id').single();
+      if (error) throw error;
+      id = data.id;
+    } else {
+      const { data, error } = await sb.from('tabi_segments').update(row).eq('id', id).eq('version', segEditing.version).select('id');
+      if (error) throw error;
+      if (!data.length) return show('segMsg', 'ほかの人が先にこの移動を更新しました。「旅に戻る」で最新の内容を確認してから、もう一度編集してください', 'warn');
+    }
+    for (const [kind, el] of [['reservation', 'sResv'], ['confirmation', 'sConf']]) {
+      const { error } = await saveSecret(segEditing.tripId, id, kind, $(el).value.trim());
+      if (error) throw error;
+    }
+    location.hash = '#/trip/' + segEditing.tripId;
+  } catch (e) {
+    show('segMsg', '保存できませんでした：' + esc(friendlyError(e)), 'ng');
+  } finally { $('btnSaveSeg').disabled = false; }
+};
+let segDeleteArmed = 0;
+$('btnDeleteSeg').onclick = async () => {
+  if (Date.now() - segDeleteArmed > 5000) { segDeleteArmed = Date.now(); return show('segMsg', 'もう一度押すと削除します。乗らなくなっただけなら、削除ではなく状態を「運休・キャンセル」にすると記録が残ります', 'warn'); }
+  segDeleteArmed = 0;
+  const { data, error } = await sb.from('tabi_segments').update({ deleted_at: new Date().toISOString() }).eq('id', segEditing.id).select('id');
+  if (error || !data.length) return show('segMsg', '削除できませんでした', 'ng');
+  location.hash = '#/trip/' + segEditing.tripId;
 };
 
 // ---------- ログイン ----------
