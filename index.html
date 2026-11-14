@@ -87,7 +87,13 @@
     border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: 4px 0;
   }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .two > div { min-width: 0; }
   .two input { min-width: 0; }
+  /* iPhoneの日付・時刻入力は幅指定が効きにくいため、見た目を標準に戻して枠内に収める */
+  input[type="date"], input[type="datetime-local"], input[type="time"] {
+    -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left;
+  }
+  input::-webkit-date-and-time-value { text-align: left; }
   a.back { display: inline-block; color: var(--main); text-decoration: none; font-weight: 700; padding: 8px 0; min-height: 44px; }
   .list .item { display: block; text-decoration: none; color: var(--ink); border-top: 1px solid var(--line); padding: 12px 0; }
   .list .item:first-child { border-top: 0; }
@@ -211,10 +217,8 @@
       <label for="sMode">移動手段</label>
       <select id="sMode"></select>
       <div id="segFields"></div>
-      <div class="two">
-        <div><label for="sDep" id="sDepLabel">出発日時</label><input id="sDep" type="datetime-local"></div>
-        <div><label for="sArr" id="sArrLabel">到着日時</label><input id="sArr" type="datetime-local"></div>
-      </div>
+      <label for="sDep" id="sDepLabel">出発日時</label><input id="sDep" type="datetime-local">
+      <label for="sArr" id="sArrLabel">到着日時</label><input id="sArr" type="datetime-local">
       <details id="tzBox"><summary class="hint">時間帯（海外の移動のとき）</summary>
         <label for="sDepTz">出発地の時間帯</label><select id="sDepTz"></select>
         <label for="sArrTz">到着地の時間帯</label><select id="sArrTz"></select>
@@ -272,7 +276,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.4.1';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
