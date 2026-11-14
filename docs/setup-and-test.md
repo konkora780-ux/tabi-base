@@ -29,7 +29,7 @@ Supabase標準のメール送信ではテンプレートを編集できず、送
    - Username: ご自分のGmailアドレス／Password: 2でコピーした16文字
    - 「Save」
 4. 「Authentication」→「Rate Limits」で「emails per hour」を `30` 程度にして保存
-5. 「Emails」→「Templates」→「Magic link or OTP」の本文に次の1行を足して保存
+5. 「Emails」→「Templates」→「Magic link or OTP」と「Confirm sign up」（初回ログイン用）の両方の本文に次の1行を足して保存
    `<p>確認コード：<b>{{ .Token }}</b></p>`
    - ⚠ drops を使う他のアプリのログインメールも、送信元がこのGmailになり、コードの行が表示されます（リンクは残ります）。
    - アプリパスワードは秘密情報です。Claude やチャットには送らないでください。
