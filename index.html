@@ -99,6 +99,10 @@
   .list .item:first-child { border-top: 0; }
   .list .t { font-weight: 700; font-size: 18px; }
   .list .sm { color: var(--sub); font-size: 15px; }
+  .list .day { font-weight: 800; color: var(--main); margin: 14px 0 0; padding-bottom: 4px; border-bottom: 2px solid var(--main); }
+  .list .day:first-child { margin-top: 0; }
+  .list .day + .item { border-top: 0; }
+  .list .item.off .t, .list .item.off .sm { text-decoration: line-through; opacity: .7; }
   dl.info { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 8px; }
   dl.info dt { color: var(--sub); font-size: 15px; }
   dl.info dd { margin: 0; overflow-wrap: anywhere; }
@@ -172,7 +176,6 @@
       <h2>旅程</h2>
       <div id="tripSegs" class="list"></div>
       <div id="tripAddBtns"></div>
-      <p class="hint">予定（観光・食事・宿など）の登録は、次の更新で追加します。</p>
     </section>
     <section>
       <h2>参加者</h2>
@@ -244,6 +247,43 @@
     <div id="segMsg"></div>
   </div>
 
+  <!-- 予定の登録・編集 -->
+  <div id="viewEv" class="hidden">
+    <a class="back" id="evBack" href="#/trips">‹ 旅に戻る</a>
+    <section>
+      <h2 id="evTitle">予定を登録</h2>
+      <label for="eCat">種類</label>
+      <select id="eCat"></select>
+      <label for="eName" id="eNameLabel">名前（必須）</label>
+      <input id="eName" maxlength="100">
+      <label for="ePlace">場所</label>
+      <input id="ePlace" maxlength="100">
+      <label for="eStart" id="eStartLabel">開始日時</label><input id="eStart" type="datetime-local">
+      <label for="eEnd" id="eEndLabel">終了日時</label><input id="eEnd" type="datetime-local">
+      <details id="eTzBox"><summary class="hint">時間帯（海外の予定のとき）</summary>
+        <label for="eTz">時間帯</label><select id="eTz"></select>
+      </details>
+      <label for="eMemo">メモ</label>
+      <textarea id="eMemo" rows="2" maxlength="2000"></textarea>
+      <label for="eStatus">状態</label>
+      <select id="eStatus">
+        <option value="scheduled">予定どおり</option>
+        <option value="cancelled">中止・キャンセル</option>
+      </select>
+    </section>
+    <section>
+      <h2>予約番号・確認コード</h2>
+      <p class="hint">ここに入れた番号は別の場所に保管し、見られる人を限定します。</p>
+      <label for="eResv">予約番号</label>
+      <input id="eResv" maxlength="200" autocomplete="off">
+      <label for="eConf">確認コード</label>
+      <input id="eConf" maxlength="200" autocomplete="off">
+    </section>
+    <button id="btnSaveEv">保存する</button>
+    <button id="btnDeleteEv" class="danger hidden">この予定を削除する</button>
+    <div id="evMsg"></div>
+  </div>
+
   <!-- 設定 -->
   <div id="viewSettings" class="hidden">
     <section>
@@ -276,7 +316,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.4.1';
+const APP_VERSION = '0.5.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -353,14 +393,14 @@ function renderTodo() {
 }
 
 // ---------- 画面の切り替え ----------
-const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit', seg: 'viewSeg' };
+const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit', seg: 'viewSeg', ev: 'viewEv' };
 function route() {
   const [v, arg, arg2] = (location.hash.replace('#/', '') || 'home').split('/');
   const view = !user ? 'login' : (VIEWS[v] && v !== 'login' ? v : 'home');
   for (const [name, id] of Object.entries(VIEWS)) $(id).classList.add('hidden');
   $(VIEWS[view]).classList.remove('hidden');
   $('tabs').classList.toggle('hidden', !user);
-  const tab = (view.startsWith('trip') || view === 'seg') ? 'trips' : view;
+  const tab = (view.startsWith('trip') || view === 'seg' || view === 'ev') ? 'trips' : view;
   for (const a of document.querySelectorAll('nav.tabs a')) a.classList.toggle('on', a.dataset.view === tab);
   renderStatus(); renderTodo();
   window.scrollTo(0, 0);
@@ -371,6 +411,7 @@ function route() {
   if (view === 'trip-new') openTripForm(null);
   if (view === 'trip-edit') openTripForm(arg);
   if (view === 'seg') openSegForm(arg, arg2);
+  if (view === 'ev') openEvForm(arg, arg2);
 }
 window.addEventListener('hashchange', route);
 window.addEventListener('online', renderStatus);
@@ -618,32 +659,60 @@ function segSummary(sg) {
   const m = MODES[sg.mode] || MODES.other;
   const title = [sg.carrier, sg.service_name].filter(Boolean).join(' ') || m.name;
   const route = [sg.from_name, sg.to_name].filter(Boolean).join(' → ');
-  const extra = [sg.platform && (sg.mode === 'flight' ? 'ゲート' + sg.platform : sg.platform + (/[番線]$/.test(sg.platform) ? '' : '番線')),
-    sg.car_no && sg.car_no + (/号車$/.test(sg.car_no) ? '' : '号車'), sg.seat].filter(Boolean).join('・');
+  const extra = [sg.platform && (sg.mode === 'flight' ? 'ゲート' + sg.platform : sg.platform + (/^\d+$/.test(sg.platform) ? '番線' : '')),
+    sg.car_no && sg.car_no + (/^\d+$/.test(sg.car_no) ? '号車' : ''), sg.seat].filter(Boolean).join('・');
   return { m, title, route, extra };
 }
 
+// 日ごとのタイムライン（移動と予定を時刻順に並べる）
+function localDateKey(iso, tz) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+}
 async function loadSegs(trip, canEdit) {
-  $('tripAddBtns').innerHTML = canEdit ? `<a class="btn" href="#/seg/${trip.id}/new">＋ 移動を登録する</a>` : '';
-  const { data, error } = await sb.from('tabi_segments').select('*').eq('trip_id', trip.id).is('deleted_at', null)
-    .order('depart_at', { ascending: true, nullsFirst: false });
+  $('tripAddBtns').innerHTML = canEdit
+    ? `<div class="two"><a class="btn" href="#/seg/${trip.id}/new">＋ 移動</a><a class="btn" href="#/ev/${trip.id}/new">＋ 予定</a></div>` : '';
+  const [segR, evR, secR] = await Promise.all([
+    sb.from('tabi_segments').select('*').eq('trip_id', trip.id).is('deleted_at', null),
+    sb.from('tabi_events').select('*').eq('trip_id', trip.id).is('deleted_at', null),
+    // 予約番号は「表示」を押したときだけ取りに行く。ここでは、見られる人にだけ「ある」ことが分かる
+    sb.from('tabi_trip_secrets').select('target_id').eq('trip_id', trip.id),
+  ]);
+  const error = segR.error || evR.error;
   if (error) { $('tripSegs').innerHTML = `<div class="msg ng">${esc(friendlyError(error))}</div>`; return; }
-  // 予約番号は「表示」を押したときだけ取りに行く。ここでは件数（あるかどうか）も見られる人だけに分かる
-  const { data: secs } = await sb.from('tabi_trip_secrets').select('target_id').eq('trip_id', trip.id).eq('target_type', 'segment');
-  const hasSecret = new Set((secs || []).map((x) => x.target_id));
-  $('tripSegs').innerHTML = data.length ? data.map((sg) => {
-    const { m, title, route, extra } = segSummary(sg);
-    const time = sg.depart_at ? `${fmtLocal(sg.depart_at, sg.depart_tz)}${tzLabel(sg.depart_tz, trip.timezone)}${sg.arrive_at ? ' → ' + fmtLocal(sg.arrive_at, sg.arrive_tz, false) + tzLabel(sg.arrive_tz, trip.timezone) : ''}` : '日時未定';
-    const cancelled = sg.status === 'cancelled' ? ' <span class="tag ng">運休・キャンセル</span>' : '';
-    const body = `<div class="t">${m.icon} ${esc(title)}${cancelled}</div><div class="sm">${esc(time)}</div>
-      ${route ? `<div>${esc(route)}</div>` : ''}${extra ? `<div class="sm">${esc(extra)}</div>` : ''}`;
-    const secretBtn = hasSecret.has(sg.id) ? `<button class="sub" onclick="showSecret(this,'${sg.id}')">予約番号を表示</button>` : '';
-    return `<div class="item">${canEdit ? `<a href="#/seg/${trip.id}/${sg.id}" style="color:inherit;text-decoration:none;display:block">${body}</a>` : body}${secretBtn}</div>`;
-  }).join('') : '<p class="hint">まだ移動が登録されていません</p>';
+  const hasSecret = new Set((secR.data || []).map((x) => x.target_id));
+  const items = [
+    ...segR.data.map((x) => ({ kind: 'seg', at: x.depart_at, tz: x.depart_tz, row: x })),
+    ...evR.data.map((x) => ({ kind: 'ev', at: x.start_at, tz: x.timezone, row: x })),
+  ].sort((a, b) => (a.at ? 0 : 1) - (b.at ? 0 : 1) || String(a.at).localeCompare(String(b.at)));
+  if (!items.length) { $('tripSegs').innerHTML = '<p class="hint">まだ移動や予定が登録されていません</p>'; return; }
+  let lastDay = null; const html = [];
+  for (const it of items) {
+    const day = it.at ? localDateKey(it.at, it.tz) : 'none';
+    if (day !== lastDay) {
+      html.push(`<div class="day">${day === 'none' ? '日時未定' : esc(fmtDate(day))}</div>`);
+      lastDay = day;
+    }
+    html.push(it.kind === 'seg' ? segItemHtml(it.row, trip, canEdit, hasSecret) : evItemHtml(it.row, trip, canEdit, hasSecret));
+  }
+  $('tripSegs').innerHTML = html.join('');
+}
+function linkWrap(canEdit, href, body) {
+  return canEdit ? `<a href="${href}" style="color:inherit;text-decoration:none;display:block">${body}</a>` : body;
+}
+function secretBtnHtml(hasSecret, type, id) {
+  return hasSecret.has(id) ? `<button class="sub" onclick="showSecret(this,'${type}','${id}')">予約番号を表示</button>` : '';
+}
+function segItemHtml(sg, trip, canEdit, hasSecret) {
+  const { m, title, route, extra } = segSummary(sg);
+  const time = sg.depart_at ? `${fmtLocal(sg.depart_at, sg.depart_tz, false)}${tzLabel(sg.depart_tz, trip.timezone)}${sg.arrive_at ? ' → ' + fmtLocal(sg.arrive_at, sg.arrive_tz, localDateKey(sg.arrive_at, sg.arrive_tz) !== localDateKey(sg.depart_at, sg.depart_tz)) + tzLabel(sg.arrive_tz, trip.timezone) : ''}` : '';
+  const cancelled = sg.status === 'cancelled' ? ' <span class="tag ng">運休・キャンセル</span>' : '';
+  const body = `<div class="sm">${esc(time)}</div><div class="t">${m.icon} ${esc(title)}${cancelled}</div>
+    ${route ? `<div>${esc(route)}</div>` : ''}${extra ? `<div class="sm">${esc(extra)}</div>` : ''}`;
+  return `<div class="item${sg.status === 'cancelled' ? ' off' : ''}">${linkWrap(canEdit, `#/seg/${trip.id}/${sg.id}`, body)}${secretBtnHtml(hasSecret, 'segment', sg.id)}</div>`;
 }
 
-async function showSecret(btn, segId) {
-  const { data, error } = await sb.from('tabi_trip_secrets').select('kind, value').eq('target_type', 'segment').eq('target_id', segId);
+async function showSecret(btn, type, id) {
+  const { data, error } = await sb.from('tabi_trip_secrets').select('kind, value').eq('target_type', type).eq('target_id', id);
   if (error || !data.length) { btn.textContent = '見られません'; return; }
   const K = { reservation: '予約番号', confirmation: '確認コード', other: 'その他' };
   btn.outerHTML = `<div class="msg ok">${data.map((x) => `${K[x.kind] || ''}：<b>${esc(x.value)}</b>`).join('<br>')}</div>`;
@@ -744,6 +813,108 @@ $('btnDeleteSeg').onclick = async () => {
   const { data, error } = await sb.from('tabi_segments').update({ deleted_at: new Date().toISOString() }).eq('id', segEditing.id).select('id');
   if (error || !data.length) return show('segMsg', '削除できませんでした', 'ng');
   location.hash = '#/trip/' + segEditing.tripId;
+};
+
+// ---------- 予定（観光・食事・宿など） ----------
+const CATS = {
+  sightseeing: { name: '観光', icon: '📷', start: '開始日時', end: '終了日時', ph: '例：中尊寺' },
+  meal:        { name: '食事', icon: '🍽️', start: '開始日時', end: '終了日時', ph: '例：昼食（わんこそば）' },
+  stay:        { name: '宿泊', icon: '🏨', start: 'チェックイン', end: 'チェックアウト', ph: '例：○○ホテル' },
+  shopping:    { name: '買い物', icon: '🛍️', start: '開始日時', end: '終了日時', ph: '例：お土産' },
+  meeting:     { name: '待ち合わせ', icon: '🤝', start: '集合日時', end: '終了日時', ph: '例：駅の改札で集合' },
+  other:       { name: 'その他', icon: '📌', start: '開始日時', end: '終了日時', ph: '' },
+};
+function evItemHtml(ev, trip, canEdit, hasSecret) {
+  const c = CATS[ev.category] || CATS.other;
+  const sameDay = ev.end_at && ev.start_at && localDateKey(ev.end_at, ev.timezone) === localDateKey(ev.start_at, ev.timezone);
+  const time = ev.start_at ? `${fmtLocal(ev.start_at, ev.timezone, false)}${ev.end_at ? '〜' + fmtLocal(ev.end_at, ev.timezone, !sameDay) : ''}${tzLabel(ev.timezone, trip.timezone)}` : '';
+  const cancelled = ev.status === 'cancelled' ? ' <span class="tag ng">中止・キャンセル</span>' : '';
+  const body = `<div class="sm">${esc(time)}</div><div class="t">${c.icon} ${esc(ev.name)}${cancelled}</div>
+    ${ev.place_name ? `<div>${esc(ev.place_name)}</div>` : ''}${ev.memo ? `<div class="sm">${esc(ev.memo)}</div>` : ''}`;
+  return `<div class="item${ev.status === 'cancelled' ? ' off' : ''}">${linkWrap(canEdit, `#/ev/${trip.id}/${ev.id}`, body)}${secretBtnHtml(hasSecret, 'event', ev.id)}</div>`;
+}
+
+let evEditing = null;
+function applyCatLabels() {
+  const c = CATS[$('eCat').value] || CATS.other;
+  $('eStartLabel').textContent = c.start; $('eEndLabel').textContent = c.end;
+  $('eName').placeholder = c.ph;
+  $('eNameLabel').textContent = (c === CATS.stay ? '宿の名前' : '名前') + '（必須）';
+}
+async function openEvForm(tripId, evId) {
+  show('evMsg', '');
+  $('evBack').href = '#/trip/' + tripId;
+  const { data: trip } = await sb.from('tabi_trips').select('id, timezone, start_date').eq('id', tripId).maybeSingle();
+  if (!trip) return show('evMsg', '旅が見つかりません', 'ng');
+  $('eCat').innerHTML = Object.entries(CATS).map(([k, c]) => `<option value="${k}">${c.icon} ${c.name}</option>`).join('');
+  let row = null; let secrets = [];
+  if (evId && evId !== 'new') {
+    row = (await sb.from('tabi_events').select('*').eq('id', evId).maybeSingle()).data;
+    if (!row) return show('evMsg', '予定が見つかりません', 'ng');
+    secrets = (await sb.from('tabi_trip_secrets').select('id, kind, value').eq('target_type', 'event').eq('target_id', evId)).data || [];
+  }
+  evEditing = { tripId, id: row?.id || null, version: row?.version, secrets };
+  $('evTitle').textContent = row ? '予定を編集' : '予定を登録';
+  $('eCat').value = row?.category || 'sightseeing';
+  applyCatLabels();
+  $('eName').value = row?.name || ''; $('ePlace').value = row?.place_name || '';
+  const tz = row?.timezone || trip.timezone;
+  fillTzSelect('eTz', tz);
+  $('eTzBox').open = !!row && tz !== trip.timezone;
+  $('eStart').value = row ? utcToLocalInput(row.start_at, tz) : `${trip.start_date}T10:00`;
+  $('eEnd').value = row ? utcToLocalInput(row.end_at, tz) : '';
+  $('eMemo').value = row?.memo || ''; $('eStatus').value = row?.status || 'scheduled';
+  $('eResv').value = secrets.find((x) => x.kind === 'reservation')?.value || '';
+  $('eConf').value = secrets.find((x) => x.kind === 'confirmation')?.value || '';
+  $('btnDeleteEv').classList.toggle('hidden', !row);
+}
+$('eCat').onchange = applyCatLabels;
+
+async function saveSecretFor(targetType, tripId, targetId, current, kind, value) {
+  const cur = current.find((x) => x.kind === kind);
+  if (!value && cur) return sb.from('tabi_trip_secrets').delete().eq('id', cur.id);
+  if (value && cur && cur.value !== value) return sb.from('tabi_trip_secrets').update({ value }).eq('id', cur.id);
+  if (value && !cur) return sb.from('tabi_trip_secrets').insert({ trip_id: tripId, target_type: targetType, target_id: targetId, kind, value });
+  return { error: null };
+}
+$('btnSaveEv').onclick = async () => {
+  const tz = $('eTz').value;
+  const row = { category: $('eCat').value, name: $('eName').value.trim(), place_name: $('ePlace').value.trim() || null,
+    start_at: localToUtcIso($('eStart').value, tz), end_at: localToUtcIso($('eEnd').value, tz), timezone: tz,
+    memo: $('eMemo').value.trim() || null, status: $('eStatus').value };
+  const c = CATS[row.category];
+  if (!row.name) return show('evMsg', $('eNameLabel').textContent.replace('（必須）', '') + 'を入れてください', 'warn');
+  if (!row.start_at) return show('evMsg', c.start + 'を入れてください', 'warn');
+  if (row.end_at && row.end_at < row.start_at) return show('evMsg', c.end + 'は' + c.start + 'より後にしてください', 'warn');
+  if (!navigator.onLine) return show('evMsg', 'オフライン中は保存できません', 'warn');
+  $('btnSaveEv').disabled = true;
+  try {
+    let id = evEditing.id;
+    if (!id) {
+      const { data, error } = await sb.from('tabi_events').insert({ ...row, trip_id: evEditing.tripId }).select('id').single();
+      if (error) throw error;
+      id = data.id;
+    } else {
+      const { data, error } = await sb.from('tabi_events').update(row).eq('id', id).eq('version', evEditing.version).select('id');
+      if (error) throw error;
+      if (!data.length) return show('evMsg', 'ほかの人が先にこの予定を更新しました。「旅に戻る」で最新の内容を確認してから、もう一度編集してください', 'warn');
+    }
+    for (const [kind, el] of [['reservation', 'eResv'], ['confirmation', 'eConf']]) {
+      const { error } = await saveSecretFor('event', evEditing.tripId, id, evEditing.secrets, kind, $(el).value.trim());
+      if (error) throw error;
+    }
+    location.hash = '#/trip/' + evEditing.tripId;
+  } catch (e) {
+    show('evMsg', '保存できませんでした：' + esc(friendlyError(e)), 'ng');
+  } finally { $('btnSaveEv').disabled = false; }
+};
+let evDeleteArmed = 0;
+$('btnDeleteEv').onclick = async () => {
+  if (Date.now() - evDeleteArmed > 5000) { evDeleteArmed = Date.now(); return show('evMsg', 'もう一度押すと削除します。行かなくなっただけなら、状態を「中止・キャンセル」にすると記録が残ります', 'warn'); }
+  evDeleteArmed = 0;
+  const { data, error } = await sb.from('tabi_events').update({ deleted_at: new Date().toISOString() }).eq('id', evEditing.id).select('id');
+  if (error || !data.length) return show('evMsg', '削除できませんでした', 'ng');
+  location.hash = '#/trip/' + evEditing.tripId;
 };
 
 // ---------- ログイン ----------
