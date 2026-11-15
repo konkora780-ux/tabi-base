@@ -366,7 +366,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -748,7 +748,7 @@ async function loadTrip(id) {
     <dt>日程</dt><dd>${fmtRange(t)}</dd>
     ${t.destination ? `<dt>行き先</dt><dd>${esc(t.destination)}</dd>` : ''}
     <dt>時間帯</dt><dd>${esc(tzName(t.timezone))}</dd>
-    <dt>予約番号</dt><dd>${scopeHtml(t, me?.role)}</dd>
+    <dt>予約番号</dt><dd>${scopeHtml(t, me?.role, !offline && navigator.onLine)}</dd>
     <dt>あなた</dt><dd>${ROLE_NAME[me?.role] || ''}</dd>
     ${t.memo ? `<dt>メモ</dt><dd>${esc(t.memo).replace(/\n/g, '<br>')}</dd>` : ''}
   </dl>`;
@@ -763,8 +763,8 @@ async function loadTrip(id) {
 
 // 予約番号を見られる範囲（判定はサーバーのRLSで行う。ここは表示と切り替えだけ）
 const SCOPE_NAME = { editors: '作成者と編集者だけが見られる', all: '参加者全員が見られる' };
-function scopeHtml(t, role) {
-  if (role === 'owner') return `<select id="scopeQuick" aria-label="予約番号を見られる人">
+function scopeHtml(t, role, online = true) {
+  if (role === 'owner' && online) return `<select id="scopeQuick" aria-label="予約番号を見られる人">
       <option value="editors"${t.secret_scope === 'editors' ? ' selected' : ''}>作成者と編集者だけ</option>
       <option value="all"${t.secret_scope === 'all' ? ' selected' : ''}>参加者全員（閲覧者も）</option></select>
     <div class="sm hint">変えられるのは作成者だけです</div>`;

@@ -55,6 +55,7 @@ const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
   console.log('status:', await txt('#statusBar'));
   await go('#/trips'); console.log('OFF trips:', await txt('#tripsUpcoming'));
   await go('#/trip/T1'); console.log('OFF trip:', await txt('#tripMsg'), '|| segs:', await txt('#tripSegs'));
+  console.log('OFF scope select:', await p.locator('#scopeQuick').count(), '|', await txt('#tripInfo'));
   console.log('OFF edit links:', await p.locator('#tripSegs a, #tripAddBtns a, #tripActions a, #tripActions button, #inviteBox:not(.hidden)').count(), '| buttons in segs:', await p.locator('#tripSegs button').count());
   await go('#/seg/T1/new', 400); console.log('OFF seg form:', await p.locator('#viewOffline').isVisible(), await p.locator('#viewSeg').isVisible());
   await go('#/home', 1200); console.log('OFF home:', await txt('#nextCard'));
