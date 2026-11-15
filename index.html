@@ -151,6 +151,7 @@
 
   <!-- ホーム -->
   <div id="viewHome" class="hidden">
+    <div id="homeNotice"></div>
     <section class="next" id="nextCard">
       <div class="label">次の行動</div>
       <div class="big">旅はまだありません</div>
@@ -203,6 +204,10 @@
       <div id="notifyMsg"></div>
       <h3 class="hint">あなたへの次の通知</h3>
       <div id="notifyNext" class="list"></div>
+      <details id="notifyStatusBox"><summary class="hint">送信状況（誰の・どの端末に届いたか）</summary>
+        <div id="notifyStatus" class="list"></div>
+        <p class="hint">「受付済」は配達業者（プッシュサービス）が預かった段階です。「届いた」は端末から受け取りの連絡があったもので、電波がないと連絡できないため、連絡がなくても届いていないとは限りません。</p>
+      </details>
       <p class="hint">通知は通信状況によって遅れたり届かなかったりすることがあります。大事な移動は時刻表やチケットでも確かめてください。</p>
     </section>
     <section id="inviteBox" class="hidden">
@@ -377,7 +382,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.11.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -462,6 +467,7 @@ function renderTodo() {
 
 // ---------- 画面の切り替え ----------
 const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit', seg: 'viewSeg', ev: 'viewEv', join: 'viewJoin' };
+let lastRouteHash = null;
 function route() {
   const [v, arg, arg2] = (location.hash.replace('#/', '') || 'home').split('/');
   // 招待リンクはログイン前に開かれることがあるので、コードを覚えておく（ログイン後に参加画面へ）
@@ -475,6 +481,8 @@ function route() {
   const tab = (view.startsWith('trip') || view === 'seg' || view === 'ev' || view === 'join') ? 'trips' : view;
   for (const a of document.querySelectorAll('nav.tabs a')) a.classList.toggle('on', a.dataset.view === tab);
   renderStatus(); renderTodo();
+  if (location.hash !== lastRouteHash) show('homeNotice', ''); // 別の画面へ移ったら案内を消す
+  lastRouteHash = location.hash;
   window.scrollTo(0, 0);
   if (!user) return;
   if (view === 'home') loadHome();
@@ -743,6 +751,11 @@ async function loadTrip(id) {
   } else {
     if (r.error || !t || t.deleted_at) {
       if (!r.error) offDelTrip(id); // 削除・退会した旅は端末からも消す
+      if (new URLSearchParams(location.search).get('from') === 'push') { // 通知から開いたが旅がない
+        history.replaceState(null, '', location.pathname + '#/home');
+        route();
+        return show('homeNotice', '通知の旅程は見つかりませんでした（削除されたか、参加していない旅です）。最新の旅程を表示しています', 'warn');
+      }
       $('tripTitle').textContent = '旅が見つかりません';
       show('tripMsg', '削除されたか、参加していない旅です。', 'warn');
       return;
@@ -753,7 +766,10 @@ async function loadTrip(id) {
   const me = members.find((m) => m.user_id === user.id);
   currentTrip = { ...t, myRole: me?.role };
   const canEditNow = !offline && navigator.onLine && ['owner', 'editor'].includes(me?.role);
-  loadSegs(t, canEditNow, offline).then((d) => { if (d && !offline) offPutTrip({ trip: t, members, ...d }); });
+  loadSegs(t, canEditNow, offline).then((d) => {
+    if (d && !offline) offPutTrip({ trip: t, members, ...d });
+    if (d && currentTrip?.id === t.id) { currentTrip.saved = d; $('tripActions').insertAdjacentHTML('beforeend', '<button class="sub" id="btnIcs">📅 カレンダーに入れる</button>'); $('btnIcs').onclick = exportIcs; }
+  });
   $('tripTitle').textContent = t.name;
   $('tripInfo').innerHTML = `<dl class="info">
     <dt>日程</dt><dd>${fmtRange(t)}</dd>
@@ -771,6 +787,36 @@ async function loadTrip(id) {
   if ($('scopeQuick')) $('scopeQuick').onchange = changeScope;
   renderMembers(members, me, !offline && navigator.onLine);
   if (!offline && navigator.onLine) loadNotify(t, canEdit); else $('notifyBox').classList.add('hidden');
+}
+
+// ---------- カレンダー登録（.ics。通知が届かないときの備え。予約番号は入れない） ----------
+function icsText(v) { return String(v ?? '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1'); }
+function icsTime(iso) { return new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+function exportIcs() {
+  const t = currentTrip; const d = t?.saved; if (!d) return;
+  const now = icsTime(new Date().toISOString());
+  const ev = [];
+  const add = (id, ver, start, end, summary, loc, desc, alarm) => {
+    ev.push('BEGIN:VEVENT', `UID:${id}@tabi-base`, `SEQUENCE:${ver || 0}`, `DTSTAMP:${now}`, `DTSTART:${icsTime(start)}`,
+      `DTEND:${icsTime(end && end > start ? end : new Date(new Date(start).getTime() + 30 * 60000).toISOString())}`,
+      `SUMMARY:${icsText(summary)}`, ...(loc ? [`LOCATION:${icsText(loc)}`] : []), ...(desc ? [`DESCRIPTION:${icsText(desc)}`] : []),
+      ...(alarm ? ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsText(summary)}`, `TRIGGER:-PT${alarm}M`, 'END:VALARM'] : []), 'END:VEVENT');
+  };
+  for (const sg of d.segs) {
+    if (sg.status !== 'scheduled' || sg.deleted_at || !sg.depart_at) continue;
+    const { m, title, route, extra } = segSummary(sg);
+    add(sg.id, sg.version, sg.depart_at, sg.arrive_at, `${m.icon || ''} ${title}${route ? '（' + route + '）' : ''}`.trim(), sg.from_name, [extra, `旅：${t.name}`].filter(Boolean).join('\n'), 30);
+  }
+  for (const e of d.evs) {
+    if (e.status !== 'scheduled' || e.deleted_at || !e.start_at) continue;
+    add(e.id, e.version, e.start_at, e.end_at, `${(CATS[e.category] || CATS.other).icon} ${e.name}`, e.place_name, `旅：${t.name}`, 0);
+  }
+  if (!ev.length) return show('tripMsg', 'カレンダーに入れる移動・予定がありません', 'warn');
+  const body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//tabi-base//JA', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', ...ev, 'END:VCALENDAR'].join('\r\n');
+  const url = URL.createObjectURL(new Blob([body], { type: 'text/calendar;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = `${t.name}.ics`; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  show('tripMsg', 'カレンダー用のファイルを作りました。開いて「すべてを追加」を選んでください。移動は30分前にカレンダーからもお知らせします。<br>旅程を変えたときは、もう一度入れ直してください（自動では変わりません）');
 }
 
 // 予約番号を見られる範囲（判定はサーバーのRLSで行う。ここは表示と切り替えだけ）
@@ -822,10 +868,30 @@ async function loadNotify(trip, canEdit) {
   }).join('') + (canEdit ? '<button class="sub" id="btnSaveNotify">通知の設定を保存</button>'
     : '<p class="hint">通知の設定を変えられるのは作成者と編集者です。</p>');
   if ($('btnSaveNotify')) $('btnSaveNotify').onclick = () => saveNotify(trip);
+  $('notifyStatusBox').open = false; $('notifyStatus').innerHTML = '';
+  $('notifyStatusBox').ontoggle = () => { if ($('notifyStatusBox').open) loadDeliveryStatus(trip); };
   const fmt = (iso) => new Date(iso).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
   $('notifyNext').innerHTML = (nR.data || []).length
     ? nR.data.map((n) => `<div class="item"><div class="sm">${esc(fmt(n.send_at))}</div><div>${esc(n.title)}</div></div>`).join('')
     : '<p class="hint">予定されている通知はありません</p>';
+}
+const DELIVERY_STATE = {
+  accepted: ['受付済', 'plain'], pending: ['送信待ち', 'plain'], sending: ['送信中', 'plain'], retry: ['再送待ち', 'warn'],
+  failed: ['失敗', 'ng'], gone: ['端末の登録切れ', 'ng'], cancelled: ['取消', 'plain'], expired: ['期限切れ', 'plain'],
+};
+async function loadDeliveryStatus(trip) {
+  $('notifyStatus').innerHTML = '<p class="hint">読み込み中…</p>';
+  const { data, error } = await sb.rpc('tabi_trip_delivery_status', { p_trip: trip.id });
+  if (error) return $('notifyStatus').innerHTML = `<div class="msg ng">${esc(friendlyError(error))}</div>`;
+  const t = (iso) => iso ? new Date(iso).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : '';
+  const d = (iso) => new Date(iso).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  $('notifyStatus').innerHTML = (data || []).length ? data.map((x) => {
+    const [label, kind] = x.clicked_at ? ['タップ済', 'ok'] : x.received_at ? ['届いた', 'ok'] : (DELIVERY_STATE[x.status] || [x.status, 'plain']);
+    const when = x.clicked_at ? t(x.clicked_at) : x.received_at ? t(x.received_at) : x.accepted_at ? t(x.accepted_at) : '';
+    return `<div class="item"><div class="row"><span class="sm">${esc(d(x.send_at))}　${esc(x.display_name)}・${esc(x.device_label)}</span>
+      <span class="tag ${kind}">${label}${when ? ' ' + when : ''}</span></div><div>${esc(x.title)}</div>
+      ${x.attempts > 1 ? `<div class="sm">送信 ${x.attempts}回</div>` : ''}</div>`;
+  }).join('') : '<p class="hint">まだ送った通知はありません</p>';
 }
 async function saveNotify(trip) {
   const rows = NOTIFY_KINDS.map((k) => ({
