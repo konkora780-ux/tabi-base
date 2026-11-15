@@ -356,7 +356,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.8.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -624,7 +624,7 @@ async function loadTrip(id) {
     <dt>日程</dt><dd>${fmtRange(t)}</dd>
     ${t.destination ? `<dt>行き先</dt><dd>${esc(t.destination)}</dd>` : ''}
     <dt>時間帯</dt><dd>${esc(tzName(t.timezone))}</dd>
-    <dt>予約番号</dt><dd>${t.secret_scope === 'all' ? '参加者全員が見られる' : '作成者と編集者だけが見られる'}</dd>
+    <dt>予約番号</dt><dd>${scopeHtml(t, me?.role)}</dd>
     <dt>あなた</dt><dd>${ROLE_NAME[me?.role] || ''}</dd>
     ${t.memo ? `<dt>メモ</dt><dd>${esc(t.memo).replace(/\n/g, '<br>')}</dd>` : ''}
   </dl>`;
@@ -633,7 +633,31 @@ async function loadTrip(id) {
     (canEdit ? `<a class="btn sub" href="#/trip-edit/${t.id}">旅の情報を編集する</a>` : '') +
     (me?.role === 'owner' ? '<button class="danger" id="btnDeleteTrip">この旅を削除する</button>' : '');
   if ($('btnDeleteTrip')) $('btnDeleteTrip').onclick = deleteTrip;
+  if ($('scopeQuick')) $('scopeQuick').onchange = changeScope;
   renderMembers(members || [], me);
+}
+
+// 予約番号を見られる範囲（判定はサーバーのRLSで行う。ここは表示と切り替えだけ）
+const SCOPE_NAME = { editors: '作成者と編集者だけが見られる', all: '参加者全員が見られる' };
+function scopeHtml(t, role) {
+  if (role === 'owner') return `<select id="scopeQuick" aria-label="予約番号を見られる人">
+      <option value="editors"${t.secret_scope === 'editors' ? ' selected' : ''}>作成者と編集者だけ</option>
+      <option value="all"${t.secret_scope === 'all' ? ' selected' : ''}>参加者全員（閲覧者も）</option></select>
+    <div class="sm hint">変えられるのは作成者だけです</div>`;
+  if (role === 'viewer' && t.secret_scope !== 'all') return `${SCOPE_NAME.editors}<div class="sm hint">閲覧者のあなたには表示されません。必要なときは作成者に聞いてください</div>`;
+  return SCOPE_NAME[t.secret_scope] || '';
+}
+async function changeScope() {
+  const scope = $('scopeQuick').value;
+  $('scopeQuick').disabled = true;
+  const { data, error } = await sb.from('tabi_trips').update({ secret_scope: scope })
+    .eq('id', currentTrip.id).eq('version', currentTrip.version).select('id');
+  if (error || !data?.length) {
+    await loadTrip(currentTrip.id);
+    return show('tripMsg', error ? '変えられませんでした：' + esc(friendlyError(error)) : 'ほかの人が先に旅の情報を変えたため、最新の状態を読み直しました。もう一度選んでください', 'ng');
+  }
+  await loadTrip(currentTrip.id);
+  show('tripMsg', scope === 'all' ? '予約番号を参加者全員（閲覧者も）が見られるようにしました' : '予約番号を作成者と編集者だけが見られるようにしました');
 }
 
 // ---------- 参加者・招待 ----------
@@ -999,7 +1023,7 @@ function segItemHtml(sg, trip, canEdit, hasSecret) {
 
 async function showSecret(btn, type, id) {
   const { data, error } = await sb.from('tabi_trip_secrets').select('kind, value').eq('target_type', type).eq('target_id', id);
-  if (error || !data.length) { btn.textContent = '見られません'; return; }
+  if (error || !data?.length) { btn.textContent = '表示できません（見られる範囲が変わった可能性があります）'; btn.disabled = true; return; }
   const K = { reservation: '予約番号', confirmation: '確認コード', other: 'その他' };
   btn.outerHTML = `<div class="msg ok">${data.map((x) => `${K[x.kind] || ''}：<b>${esc(x.value)}</b>`).join('<br>')}</div>`;
 }
