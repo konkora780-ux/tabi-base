@@ -36,7 +36,8 @@ jobs:
         run: |
           base="${{ steps.deploy.outputs.page_url }}"
           sleep 20
-          code() { curl -s -o /dev/null -w '%{http_code}' "$base$1?t=$(date +%s)"; }
+          # 一時的な 5xx は数回まで待って取り直す
+          code() { for i in 1 2 3 4 5 6; do c=$(curl -s -o /dev/null -w '%{http_code}' "$base$1?t=$(date +%s%N)"); case $c in 5*) sleep 5;; *) break;; esac; done; echo $c; }
           echo "index.html: $(code index.html)"; [ "$(code index.html)" = 200 ] || { echo "::error::画面が開けません"; exit 1; }
           echo "sw.js: $(code sw.js)"; [ "$(code sw.js)" = 200 ] || { echo "::error::sw.js が開けません"; exit 1; }
           for f in supabase/setup.sql supabase/stage1-db.sql docs/setup-and-test.md README.md; do
