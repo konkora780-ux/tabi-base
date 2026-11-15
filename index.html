@@ -382,7 +382,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.11.1';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -848,6 +848,7 @@ const NOTIFY_KINDS = [
   { kind: 'prep', name: '出発準備（その日最初）', def: 90, unit: 'min', opts: [60, 90, 120] },
   { kind: 'depart', name: '出発前', def: 30, unit: 'min', opts: [15, 30, 45, 60] },
   { kind: 'arrive', name: '到着予定', def: 10, unit: 'min', opts: [5, 10, 15, 20] },
+  { kind: 'change', name: '旅程変更（ほかの人が変えたとき）', def: 5, unit: 'none', opts: [5] },
 ];
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const optLabel = (k, v) => k.unit === 'time' ? `前日の${hhmm(v)}` : `${v}分前`;
@@ -864,7 +865,7 @@ async function loadNotify(trip, canEdit) {
     const r = rules[k.kind] || {}; const on = r.enabled !== false; const v = r.minutes ?? k.def;
     const opts = k.opts.includes(v) ? k.opts : [...k.opts, v].sort((a, b) => a - b);
     return `<div class="row nrow"><label><input type="checkbox" data-nk="${k.kind}"${on ? ' checked' : ''}${canEdit ? '' : ' disabled'}> ${k.name}</label>
-      <select data-nm="${k.kind}"${canEdit ? '' : ' disabled'}>${opts.map((o) => `<option value="${o}"${o === v ? ' selected' : ''}>${optLabel(k, o)}</option>`).join('')}</select></div>`;
+      <select data-nm="${k.kind}"${canEdit ? '' : ' disabled'}${k.unit === 'none' ? ' hidden' : ''}>${opts.map((o) => `<option value="${o}"${o === v ? ' selected' : ''}>${optLabel(k, o)}</option>`).join('')}</select></div>`;
   }).join('') + (canEdit ? '<button class="sub" id="btnSaveNotify">通知の設定を保存</button>'
     : '<p class="hint">通知の設定を変えられるのは作成者と編集者です。</p>');
   if ($('btnSaveNotify')) $('btnSaveNotify').onclick = () => saveNotify(trip);
