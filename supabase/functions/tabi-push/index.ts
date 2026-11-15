@@ -19,11 +19,11 @@ const VAPID_PUBLIC = Deno.env.get("VAPID_PUBLIC_KEY") ?? "";
 const VAPID_PRIVATE = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") ?? "https://konkora780-ux.github.io/tabi-base/";
 
-// 再試行の間隔（1回目失敗→1分後、2回目失敗→5分後、3回目で打ち切り）
-const RETRY_DELAYS_MIN = [1, 5];
+// 再試行の間隔（設計書：1分後・5分後・15分後、最大3回。有効期限を過ぎたら打ち切り）
+const RETRY_DELAYS_MIN = [1, 5, 15];
 const MAX_ATTEMPTS = RETRY_DELAYS_MIN.length + 1;
-// 通知の有効期限（この時間内に端末へ届かなければプッシュサービスが破棄する）
-const TTL_SECONDS = 60 * 60;
+// 有効期限のない通知（テスト通知）の保管時間
+const DEFAULT_TTL_SECONDS = 60 * 60;
 
 const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -46,6 +46,7 @@ type Claimed = {
   delivery_id: string; receipt_token: string; attempts: number;
   notification_id: string; title: string; body: string; url: string; debug_fail_first: boolean;
   subscription_id: string; endpoint: string; p256dh: string; auth: string;
+  expires_at: string | null; urgency: string | null; trip_id: string | null; kind: string | null;
 };
 
 // 失敗の種類を判断する
@@ -64,6 +65,8 @@ async function sendOne(c: Claimed) {
     title: c.title,
     body: c.body,
     url: c.url,
+    trip: c.trip_id, // タップしたときに開く旅（見つからなければホームで案内）
+    kind: c.kind,
     tag: c.notification_id, // 同じ通知は端末上で1つにまとまる（二重表示の抑制）
     nid: c.notification_id,
     d: c.delivery_id,
@@ -74,6 +77,15 @@ async function sendOne(c: Claimed) {
   let httpStatus: number | null = null;
   let error = "";
   let ok = false;
+  // TTL（端末が圏外のとき、プッシュサービスが保管する時間）は有効期限までの残り時間にする
+  const ttl = c.expires_at
+    ? Math.floor((new Date(c.expires_at).getTime() - Date.now()) / 1000)
+    : DEFAULT_TTL_SECONDS;
+  if (ttl <= 0) {
+    await admin.from("tabi_notification_deliveries").update({ status: "expired", last_error: "有効期限を過ぎたため送りませんでした" })
+      .eq("id", c.delivery_id);
+    return { id: c.delivery_id, result: "expired", httpStatus: null };
+  }
 
   if (c.debug_fail_first && c.attempts === 1) {
     // 再試行テスト用：1回目だけ送らずに「一時的な失敗」として扱う
@@ -84,7 +96,7 @@ async function sendOne(c: Claimed) {
       const res = await webpush.sendNotification(
         { endpoint: c.endpoint, keys: { p256dh: c.p256dh, auth: c.auth } },
         payload,
-        { TTL: TTL_SECONDS, urgency: "high", topic: c.notification_id.replaceAll("-", "").slice(0, 32) },
+        { TTL: ttl, urgency: c.urgency === "normal" ? "normal" : "high", topic: c.notification_id.replaceAll("-", "").slice(0, 32) },
       );
       httpStatus = res.statusCode;
       ok = true;
@@ -111,7 +123,12 @@ async function sendOne(c: Claimed) {
   const update: Record<string, unknown> = { status: kind, http_status: httpStatus, last_error: error };
   if (kind === "retry") {
     const delay = RETRY_DELAYS_MIN[c.attempts - 1] ?? RETRY_DELAYS_MIN[RETRY_DELAYS_MIN.length - 1];
-    update.next_attempt_at = new Date(now.getTime() + delay * 60_000).toISOString();
+    const next = new Date(now.getTime() + delay * 60_000);
+    if (c.expires_at && next >= new Date(c.expires_at)) {
+      update.status = "expired"; // 次の再試行が有効期限より後になるので、ここで打ち切る
+    } else {
+      update.next_attempt_at = next.toISOString();
+    }
   }
   await admin.from("tabi_notification_deliveries").update(update).eq("id", c.delivery_id);
 
