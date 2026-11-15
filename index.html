@@ -130,6 +130,7 @@
   <div id="viewLogin" class="hidden">
     <section>
       <h2>ログイン</h2>
+      <div id="loginInvite" class="msg warn hidden">旅に招待されています。ログインすると参加の確認画面が開きます。</div>
       <p class="hint">メールに届く数字のコードでログインします。パスワードは使いません。</p>
       <label for="email">メールアドレス</label>
       <input id="email" type="email" autocomplete="email" inputmode="email" placeholder="example@mail.com">
@@ -163,6 +164,13 @@
     <a class="btn" href="#/trip-new">＋ 新しい旅を作る</a>
     <section><h2>これからの旅</h2><div id="tripsUpcoming" class="list"></div></section>
     <section><h2>過去の旅</h2><div id="tripsPast" class="list"></div></section>
+    <section>
+      <h2>招待リンクで参加する</h2>
+      <p class="hint">届いた招待リンクを貼り付けて「開く」を押してください。ホーム画面の旅ベースから参加したいときに使います。</p>
+      <input id="joinPaste" placeholder="https://…#/join/…" autocomplete="off">
+      <button id="btnJoinPaste" class="sub">開く</button>
+      <div id="joinPasteMsg"></div>
+    </section>
   </div>
 
   <!-- 旅の詳細 -->
@@ -182,6 +190,36 @@
     <section>
       <h2>参加者</h2>
       <div id="tripMembers" class="list"></div>
+      <div id="memberMsg"></div>
+      <div id="myNameBox"></div>
+      <div id="leaveBox"></div>
+    </section>
+    <section id="inviteBox" class="hidden">
+      <h2>同行者を招待する</h2>
+      <p class="hint">リンクは1人に1回だけ使えます。7日で期限切れになります。</p>
+      <label for="invRole">招待する人の権限</label>
+      <select id="invRole">
+        <option value="viewer">閲覧者（見るだけ）</option>
+        <option value="editor">編集者（登録・編集もできる）</option>
+      </select>
+      <button id="btnInvite">招待リンクを作る</button>
+      <div id="invResult"></div>
+      <h3 class="hint">これまでに作った招待リンク</h3>
+      <div id="invList" class="list"></div>
+    </section>
+  </div>
+
+  <!-- 招待リンクから参加 -->
+  <div id="viewJoin" class="hidden">
+    <section>
+      <h2>旅への招待</h2>
+      <div id="joinInfo"><p class="hint">確認中…</p></div>
+      <div id="joinForm" class="hidden">
+        <label for="joinName">この旅で表示するあなたの名前</label>
+        <input id="joinName" maxlength="40" placeholder="例：こんちゃん">
+        <button id="btnJoin">この旅に参加する</button>
+      </div>
+      <div id="joinMsg"></div>
     </section>
   </div>
 
@@ -318,7 +356,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -395,14 +433,17 @@ function renderTodo() {
 }
 
 // ---------- 画面の切り替え ----------
-const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit', seg: 'viewSeg', ev: 'viewEv' };
+const VIEWS = { login: 'viewLogin', home: 'viewHome', settings: 'viewSettings', trips: 'viewTrips', trip: 'viewTrip', 'trip-new': 'viewTripEdit', 'trip-edit': 'viewTripEdit', seg: 'viewSeg', ev: 'viewEv', join: 'viewJoin' };
 function route() {
   const [v, arg, arg2] = (location.hash.replace('#/', '') || 'home').split('/');
+  // 招待リンクはログイン前に開かれることがあるので、コードを覚えておく（ログイン後に参加画面へ）
+  if (v === 'join' && arg) localStorage.setItem('tabi.pendingInvite', arg);
+  $('loginInvite').classList.toggle('hidden', !localStorage.getItem('tabi.pendingInvite'));
   const view = !user ? 'login' : (VIEWS[v] && v !== 'login' ? v : 'home');
   for (const [name, id] of Object.entries(VIEWS)) $(id).classList.add('hidden');
   $(VIEWS[view]).classList.remove('hidden');
   $('tabs').classList.toggle('hidden', !user);
-  const tab = (view.startsWith('trip') || view === 'seg' || view === 'ev') ? 'trips' : view;
+  const tab = (view.startsWith('trip') || view === 'seg' || view === 'ev' || view === 'join') ? 'trips' : view;
   for (const a of document.querySelectorAll('nav.tabs a')) a.classList.toggle('on', a.dataset.view === tab);
   renderStatus(); renderTodo();
   window.scrollTo(0, 0);
@@ -414,6 +455,7 @@ function route() {
   if (view === 'trip-edit') openTripForm(arg);
   if (view === 'seg') openSegForm(arg, arg2);
   if (view === 'ev') openEvForm(arg, arg2);
+  if (view === 'join') openJoin(arg);
 }
 window.addEventListener('hashchange', route);
 window.addEventListener('online', renderStatus);
@@ -565,7 +607,7 @@ let currentTrip = null;
 async function loadTrip(id) {
   currentTrip = null;
   $('tripTitle').textContent = '読み込み中…'; $('tripInfo').innerHTML = ''; $('tripActions').innerHTML = '';
-  $('tripMembers').innerHTML = ''; show('tripMsg', '');
+  $('tripMembers').innerHTML = ''; $('inviteBox').classList.add('hidden'); $('myNameBox').innerHTML = $('leaveBox').innerHTML = ''; show('tripMsg', ''); show('memberMsg', '');
   const { data: t, error } = await sb.from('tabi_trips').select('*').eq('id', id).maybeSingle();
   if (error || !t || t.deleted_at) {
     $('tripTitle').textContent = '旅が見つかりません';
@@ -591,10 +633,176 @@ async function loadTrip(id) {
     (canEdit ? `<a class="btn sub" href="#/trip-edit/${t.id}">旅の情報を編集する</a>` : '') +
     (me?.role === 'owner' ? '<button class="danger" id="btnDeleteTrip">この旅を削除する</button>' : '');
   if ($('btnDeleteTrip')) $('btnDeleteTrip').onclick = deleteTrip;
-  $('tripMembers').innerHTML = (members || []).map((m) =>
-    `<div class="item"><span class="t">${esc(m.display_name || '（名前なし）')}</span>${m.user_id === user.id ? '（あなた）' : ''}
-     <div class="sm">${ROLE_NAME[m.role]}</div></div>`).join('');
+  renderMembers(members || [], me);
 }
+
+// ---------- 参加者・招待 ----------
+let memberArmed = { key: '', at: 0 };
+function armed(key) { // 危ない操作は5秒以内に2回押したときだけ実行する
+  if (memberArmed.key === key && Date.now() - memberArmed.at < 5000) { memberArmed = { key: '', at: 0 }; return true; }
+  memberArmed = { key, at: Date.now() }; return false;
+}
+function renderMembers(members, me) {
+  const isOwner = me?.role === 'owner';
+  $('tripMembers').innerHTML = members.map((m) => {
+    const mine = m.user_id === user.id;
+    const ctl = isOwner && !mine ? `<div class="two" style="margin-top:6px">
+        <select data-role="${m.user_id}" aria-label="権限">
+          <option value="editor"${m.role === 'editor' ? ' selected' : ''}>編集者</option>
+          <option value="viewer"${m.role === 'viewer' ? ' selected' : ''}>閲覧者</option>
+        </select>
+        <button class="danger" data-remove="${m.user_id}">外す</button></div>
+        <button class="sub" data-transfer="${m.user_id}">この人に作成者を譲る</button>` : '';
+    return `<div class="item"><span class="t">${esc(m.display_name || '（名前なし）')}</span>${mine ? '（あなた）' : ''}
+      <div class="sm">${ROLE_NAME[m.role]}</div>${ctl}</div>`;
+  }).join('');
+  show('memberMsg', '');
+  $('myNameBox').innerHTML = me ? `<details><summary class="hint">この旅での自分の表示名を変える</summary>
+    <input id="myName" maxlength="40" value="${esc(me.display_name || '')}"><button class="sub" id="btnMyName">表示名を保存</button></details>` : '';
+  $('leaveBox').innerHTML = !me ? '' : isOwner
+    ? '<p class="hint">作成者はこの旅から抜けられません。抜けたいときは、先にほかの参加者へ作成者を譲ってください。</p>'
+    : '<button class="danger" id="btnLeave">この旅から抜ける</button>';
+  for (const el of document.querySelectorAll('[data-role]')) el.onchange = () => changeRole(el.dataset.role, el.value, el);
+  for (const el of document.querySelectorAll('[data-remove]')) el.onclick = () => removeMember(el.dataset.remove, members);
+  for (const el of document.querySelectorAll('[data-transfer]')) el.onclick = () => transferOwner(el.dataset.transfer, members);
+  if ($('btnMyName')) $('btnMyName').onclick = saveMyName;
+  if ($('btnLeave')) $('btnLeave').onclick = leaveTrip;
+  $('inviteBox').classList.toggle('hidden', !isOwner);
+  $('invResult').innerHTML = '';
+  if (isOwner) loadInvites();
+}
+const nameOf = (members, uid) => esc(members.find((m) => m.user_id === uid)?.display_name || '（名前なし）');
+
+async function changeRole(uid, role, sel) {
+  const { data, error } = await sb.from('tabi_members').update({ role })
+    .eq('trip_id', currentTrip.id).eq('user_id', uid).select('user_id');
+  if (error || !data?.length) {
+    show('memberMsg', '権限を変えられませんでした：' + esc(friendlyError(error || '権限がありません')), 'ng');
+    return loadTrip(currentTrip.id);
+  }
+  show('memberMsg', `権限を「${ROLE_NAME[role]}」に変えました`);
+}
+async function removeMember(uid, members) {
+  if (!armed('rm' + uid)) return show('memberMsg', `もう一度「外す」を押すと、「${nameOf(members, uid)}」をこの旅から外します。外された人はこの旅を見られなくなります`, 'warn');
+  const { data, error } = await sb.from('tabi_members').delete()
+    .eq('trip_id', currentTrip.id).eq('user_id', uid).select('user_id');
+  if (error || !data?.length) return show('memberMsg', '外せませんでした：' + esc(friendlyError(error || '権限がありません')), 'ng');
+  await loadTrip(currentTrip.id);
+  show('memberMsg', '参加者を外しました');
+}
+async function transferOwner(uid, members) {
+  if (!armed('tr' + uid)) return show('memberMsg', `もう一度押すと、「${nameOf(members, uid)}」が作成者になり、あなたは編集者になります。招待や参加者の管理は新しい作成者だけができるようになります`, 'warn');
+  const { error } = await sb.rpc('tabi_transfer_owner', { p_trip: currentTrip.id, p_new_owner: uid });
+  if (error) return show('memberMsg', '譲れませんでした：' + esc(friendlyError(error)), 'ng');
+  await loadTrip(currentTrip.id);
+  show('memberMsg', '作成者を譲りました。あなたは編集者になりました');
+}
+async function saveMyName() {
+  const name = $('myName').value.trim();
+  if (!name) return show('memberMsg', '表示名を入れてください', 'warn');
+  const { data, error } = await sb.from('tabi_members').update({ display_name: name })
+    .eq('trip_id', currentTrip.id).eq('user_id', user.id).select('user_id');
+  if (error || !data?.length) return show('memberMsg', '保存できませんでした：' + esc(friendlyError(error || '')), 'ng');
+  await loadTrip(currentTrip.id);
+  show('memberMsg', '表示名を保存しました');
+}
+async function leaveTrip() {
+  if (!armed('leave')) return show('memberMsg', 'もう一度「この旅から抜ける」を押すと抜けます。抜けるとこの旅を見られなくなります（もう一度参加するには新しい招待リンクが必要です）', 'warn');
+  const { data, error } = await sb.from('tabi_members').delete()
+    .eq('trip_id', currentTrip.id).eq('user_id', user.id).select('user_id');
+  if (error || !data?.length) return show('memberMsg', '抜けられませんでした：' + esc(friendlyError(error || '')), 'ng');
+  location.hash = '#/trips';
+}
+
+function inviteUrl(code) { return location.origin + location.pathname + '#/join/' + code; }
+async function createInvite() {
+  $('btnInvite').disabled = true;
+  const role = $('invRole').value;
+  const { data: code, error } = await sb.rpc('tabi_create_invitation', { p_trip: currentTrip.id, p_role: role });
+  $('btnInvite').disabled = false;
+  if (error || !code) return show('invResult', '作れませんでした：' + esc(friendlyError(error || '')), 'ng');
+  const url = inviteUrl(code);
+  $('invResult').innerHTML = `<div class="msg ok">招待リンクを作りました（${ROLE_NAME[role]}）。<b>このリンクはこの画面でしか表示されません。</b>今すぐ同行者に送ってください。
+    <input id="invUrl" readonly value="${esc(url)}">
+    <div class="two"><button class="sub" id="btnCopyInv">コピー</button><button class="sub" id="btnShareInv">送る</button></div></div>`;
+  $('btnCopyInv').onclick = async () => {
+    try { await navigator.clipboard.writeText(url); $('btnCopyInv').textContent = 'コピーしました'; }
+    catch { $('invUrl').select(); $('btnCopyInv').textContent = '選択しました。長押しでコピー'; }
+  };
+  $('btnShareInv').onclick = async () => {
+    if (!navigator.share) return $('btnCopyInv').click();
+    try { await navigator.share({ title: '旅ベースへの招待', text: `「${currentTrip.name}」の旅程を旅ベースで共有します。`, url }); } catch { /* 閉じたとき */ }
+  };
+  loadInvites();
+}
+function inviteStatus(i) {
+  if (i.revoked_at) return ['無効にした', 'plain'];
+  if (i.used_at) return ['使用済み', 'ok'];
+  if (new Date(i.expires_at) < new Date()) return ['期限切れ', 'plain'];
+  return ['未使用', 'warn'];
+}
+async function loadInvites() {
+  const tripId = currentTrip?.id;
+  const { data, error } = await sb.from('tabi_trip_invitations')
+    .select('id, role, created_at, expires_at, used_at, used_by, revoked_at').eq('trip_id', tripId).order('created_at', { ascending: false });
+  if (tripId !== currentTrip?.id) return;
+  if (error) return $('invList').innerHTML = `<div class="msg ng">${esc(friendlyError(error))}</div>`;
+  const md = (iso) => new Date(iso).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const list = data || [];
+  $('invList').innerHTML = list.length ? list.map((i) => {
+    const [label, kind] = inviteStatus(i);
+    return `<div class="item"><div class="row"><span>${ROLE_NAME[i.role]}・${md(i.created_at)}作成</span><span class="tag ${kind}">${label}</span></div>
+      <div class="sm">${i.used_at ? md(i.used_at) + 'に参加' : '期限 ' + md(i.expires_at)}</div>
+      ${label === '未使用' ? `<button class="sub" data-revoke="${i.id}">このリンクを無効にする</button>` : ''}</div>`;
+  }).join('') : '<p class="hint">まだありません</p>';
+  for (const el of document.querySelectorAll('[data-revoke]')) el.onclick = async () => {
+    const { error: e } = await sb.rpc('tabi_revoke_invitation', { p_invitation: el.dataset.revoke });
+    if (e) return show('invResult', '無効にできませんでした：' + esc(friendlyError(e)), 'ng');
+    show('invResult', '招待リンクを無効にしました。もうこのリンクでは参加できません');
+    loadInvites();
+  };
+}
+$('btnInvite').onclick = createInvite;
+
+// 招待リンクから参加する画面
+let joinCode = '';
+const JOIN_STATUS = {
+  invalid: 'この招待リンクは使えません。リンクが途中で切れていないか確かめるか、作成者に新しいリンクを頼んでください。',
+  revoked: 'この招待リンクは作成者が無効にしました。作成者に新しいリンクを頼んでください。',
+  used: 'この招待リンクはすでに使われています（1人1回だけ使えます）。作成者に新しいリンクを頼んでください。',
+  expired: 'この招待リンクは期限（7日）が切れています。作成者に新しいリンクを頼んでください。',
+};
+async function openJoin(code) {
+  joinCode = code || localStorage.getItem('tabi.pendingInvite') || '';
+  $('joinForm').classList.add('hidden'); show('joinMsg', '');
+  $('joinInfo').innerHTML = '<p class="hint">確認中…</p>';
+  const { data, error } = await sb.rpc('tabi_peek_invitation', { p_code: joinCode });
+  if (error) return $('joinInfo').innerHTML = `<div class="msg ng">${esc(friendlyError(error))}</div>`;
+  const r = (data || [])[0] || { status: 'invalid' };
+  if (r.status !== 'ok') localStorage.removeItem('tabi.pendingInvite');
+  if (r.status === 'already_member') {
+    $('joinInfo').innerHTML = `<div class="msg ok">「${esc(r.trip_name)}」にはもう参加しています。</div><a class="btn" href="#/trips">旅の一覧へ</a>`;
+    return;
+  }
+  if (r.status !== 'ok') return $('joinInfo').innerHTML = `<div class="msg ng">${JOIN_STATUS[r.status] || JOIN_STATUS.invalid}</div>`;
+  $('joinInfo').innerHTML = `<dl class="info"><dt>旅</dt><dd>${esc(r.trip_name)}</dd><dt>あなたの権限</dt><dd>${ROLE_NAME[r.role]}${r.role === 'viewer' ? '（見るだけ）' : '（移動・予定を登録・編集できる）'}</dd></dl>`;
+  if (!$('joinName').value) $('joinName').value = (user.email || '').split('@')[0].slice(0, 40);
+  $('joinForm').classList.remove('hidden');
+}
+$('btnJoin').onclick = async () => {
+  $('btnJoin').disabled = true;
+  const { data: tripId, error } = await sb.rpc('tabi_accept_invitation', { p_code: joinCode, p_display_name: $('joinName').value.trim() });
+  $('btnJoin').disabled = false;
+  if (error) return show('joinMsg', '参加できませんでした：' + esc(friendlyError(error)), 'ng');
+  localStorage.removeItem('tabi.pendingInvite');
+  location.hash = '#/trip/' + tripId;
+};
+$('btnJoinPaste').onclick = () => {
+  const m = $('joinPaste').value.trim().match(/#\/join\/([A-Za-z0-9_-]+)/) || $('joinPaste').value.trim().match(/^([A-Za-z0-9_-]{20,})$/);
+  if (!m) return show('joinPasteMsg', '招待リンクの形ではないようです。届いたリンクをそのまま貼り付けてください', 'warn');
+  show('joinPasteMsg', ''); $('joinPaste').value = '';
+  location.hash = '#/join/' + m[1];
+};
 
 let deleteArmed = 0;
 async function deleteTrip() {
@@ -1020,7 +1228,8 @@ $('btnVerify').onclick = async () => {
   if (error) return show('loginMsg', esc(friendlyError(error)), 'ng');
   show('loginMsg', '');
   $('code').value = '';
-  location.hash = '#/home';
+  const inv = localStorage.getItem('tabi.pendingInvite');
+  location.hash = inv ? '#/join/' + inv : '#/home';
 };
 
 // ---------- 通知 ----------
