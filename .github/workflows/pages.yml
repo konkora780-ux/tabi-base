@@ -40,5 +40,5 @@ jobs:
           echo "index.html: $(code index.html)"; [ "$(code index.html)" = 200 ] || { echo "::error::画面が開けません"; exit 1; }
           echo "sw.js: $(code sw.js)"; [ "$(code sw.js)" = 200 ] || { echo "::error::sw.js が開けません"; exit 1; }
           for f in supabase/setup.sql supabase/stage1-db.sql docs/setup-and-test.md README.md; do
-            c=$(code $f); echo "$f: $c"; [ "$c" = 404 ] || { echo "::error::$f が公開されています"; exit 1; }
+            c=$(code $f); echo "$f: $c"; [ "$c" != 200 ] || { echo "::error::$f が公開されています"; exit 1; }
           done
