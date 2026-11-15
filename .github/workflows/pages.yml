@@ -1,0 +1,44 @@
+# 画面に必要なファイルだけを GitHub Pages に公開する
+# （supabase/・docs/・tests/ などは公開しない。設計書 第11章「supabase/（公開しない）」）
+name: 画面をGitHub Pagesに公開
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 公開するファイルだけを集める
+        run: |
+          mkdir _site
+          cp index.html push-test.html sw.js manifest.webmanifest _site/
+          cp -r icons lib _site/
+          echo "公開するファイル:"; find _site -type f | sort
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+      - name: 公開されたか・SQLが見えないかを確認
+        run: |
+          base="${{ steps.deploy.outputs.page_url }}"
+          sleep 20
+          code() { curl -s -o /dev/null -w '%{http_code}' "$base$1?t=$(date +%s)"; }
+          echo "index.html: $(code index.html)"; [ "$(code index.html)" = 200 ] || { echo "::error::画面が開けません"; exit 1; }
+          echo "sw.js: $(code sw.js)"; [ "$(code sw.js)" = 200 ] || { echo "::error::sw.js が開けません"; exit 1; }
+          for f in supabase/setup.sql supabase/stage1-db.sql docs/setup-and-test.md README.md; do
+            c=$(code $f); echo "$f: $c"; [ "$c" = 404 ] || { echo "::error::$f が公開されています"; exit 1; }
+          done
