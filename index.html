@@ -50,6 +50,8 @@
   .next { border: 2px solid var(--main); }
   .next .label { color: var(--main); font-weight: 700; font-size: 15px; }
   .next .big { font-size: 22px; font-weight: 800; margin: 4px 0; }
+  .next .lines { font-size: 18px; }
+  .next .after { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 8px; }
   button, .btn {
     font: inherit; font-weight: 600; width: 100%; min-height: 52px; border-radius: 12px; border: 0;
     background: var(--main); color: var(--main-ink); margin: 6px 0; padding: 10px 14px; cursor: pointer;
@@ -316,7 +318,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -467,19 +469,95 @@ async function loadTrips() {
   }
 }
 
+// ---------- ホーム：次の行動カード ----------
+function untilText(ms) {
+  if (ms <= 0) return 'まもなく';
+  const min = Math.ceil(ms / 60000);
+  if (min < 60) return `あと${min}分`;
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h < 24) return `あと${h}時間${m ? m + '分' : ''}`;
+  return `あと${Math.round(h / 24)}日`;
+}
+// 移動・予定を「いつ・何を・どこで」の形にそろえる
+function toAction(it, trip) {
+  if (it.kind === 'seg') {
+    const sg = it.row; const { m, title, extra } = segSummary(sg);
+    return { kind: 'seg', start: sg.depart_at, end: sg.arrive_at, tz: sg.depart_tz, endTz: sg.arrive_tz, trip,
+      icon: m.icon, title, verb: '発', where: [sg.from_name, sg.platform && (sg.mode === 'flight' ? 'ゲート' + sg.platform : sg.platform + (/^\d+$/.test(sg.platform) ? '番線' : ''))].filter(Boolean).join(' '),
+      seat: [sg.car_no && sg.car_no + (/^\d+$/.test(sg.car_no) ? '号車' : ''), sg.seat].filter(Boolean).join(''),
+      to: sg.to_name, href: `#/trip/${trip.id}` };
+  }
+  const ev = it.row; const c = CATS[ev.category] || CATS.other;
+  return { kind: 'ev', start: ev.start_at, end: ev.end_at, tz: ev.timezone, endTz: ev.timezone, trip,
+    icon: c.icon, title: ev.name, verb: ev.category === 'stay' ? 'チェックイン' : 'から', where: ev.place_name || '', seat: '', to: '', href: `#/trip/${trip.id}` };
+}
+let homeTimer = null;
+let homeActions = null;
+function renderNextCard() {
+  if (!homeActions) return;
+  const { list, trip } = homeActions;
+  const now = Date.now();
+  // 移動中・予定の途中（開始済みで終了前）を優先し、なければ次に始まるもの
+  const ongoing = list.find((a) => a.start && Date.parse(a.start) <= now && a.end && Date.parse(a.end) > now);
+  const upcoming = list.filter((a) => a.start && Date.parse(a.start) > now);
+  const main = ongoing || upcoming[0];
+  const after = ongoing ? upcoming[0] : upcoming[1];
+  if (!main) {
+    $('nextCard').innerHTML = `<div class="label">${trip ? esc(trip.name) : '次の行動'}</div><div class="big">これからの予定はありません</div>
+      ${trip ? `<a class="btn sub" href="#/trip/${trip.id}">旅程を見る</a>` : '<a class="btn" href="#/trip-new">＋ 新しい旅を作る</a>'}`;
+    return;
+  }
+  let label, big, lines = [];
+  if (main === ongoing) {
+    label = main.kind === 'seg' ? '移動中' : 'いまの予定';
+    big = `${main.icon} ${esc(main.title)}`;
+    lines.push(main.kind === 'seg'
+      ? `${main.to ? esc(main.to) + ' ' : ''}${fmtLocal(main.end, main.endTz, false)}着予定（${untilText(Date.parse(main.end) - now)}）`
+      : `${fmtLocal(main.end, main.endTz, false)}まで（${untilText(Date.parse(main.end) - now)}）`);
+  } else {
+    label = '次の行動';
+    const sameDay = localDateKey(main.start, main.tz) === localDateKey(new Date(now).toISOString(), main.tz);
+    big = `${main.icon} ${esc(main.title)} ${fmtLocal(main.start, main.tz, !sameDay)}${main.verb === 'から' ? 'から' : main.verb}`;
+    lines.push(`<b>（${untilText(Date.parse(main.start) - now)}）</b>`);
+  }
+  if (main.where && !(main === ongoing && main.kind === 'seg')) lines.push(esc(main.where));
+  if (main.seat) lines.push(esc(main.seat));
+  if (main.kind === 'seg' && main !== ongoing && main.to) lines.push(`→ ${esc(main.to)}${main.end ? ' ' + fmtLocal(main.end, main.endTz, false) + '着' : ''}`);
+  const afterHtml = after ? `<div class="after"><span class="hint">その次</span><br>${after.icon} ${esc(after.title)}　${fmtLocal(after.start, after.tz, localDateKey(after.start, after.tz) !== localDateKey(main.start || after.start, main.tz))}</div>` : '';
+  $('nextCard').innerHTML = `<div class="label">${label}</div><div class="big">${big}</div>
+    <div class="lines">${lines.map((l) => `<div>${l}</div>`).join('')}</div>${afterHtml}
+    <a class="btn sub" href="${main.href}">旅程をすべて見る</a>`;
+}
 async function loadHome() {
   try {
     const trips = await fetchMyTrips();
     const today = todayStr();
-    const now = trips.find((t) => t.start_date <= today && t.end_date >= today);
-    const next = trips.find((t) => t.start_date > today);
-    const t = now || next;
-    $('nextCard').innerHTML = t
-      ? `<div class="label">${now ? '旅行中' : '次の旅'}</div><div class="big">${esc(t.name)}</div>
-         <p class="hint">${fmtRange(t)}${t.destination ? '・' + esc(t.destination) : ''}<br>移動や予定を登録すると、ここに「次の行動」が出ます（次の更新で追加）。</p>
-         <a class="btn sub" href="#/trip/${t.id}">旅を開く</a>`
-      : `<div class="label">次の行動</div><div class="big">旅はまだありません</div>
-         <a class="btn" href="#/trip-new">＋ 新しい旅を作る</a>`;
+    // 前日〜これからの旅（時差で日付がずれても拾えるように1日前から）
+    const yday = new Date(Date.now() - 86400000); const ydayStr = new Date(yday.getTime() - yday.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const active = trips.filter((t) => t.end_date >= ydayStr);
+    if (!active.length) {
+      homeActions = null;
+      $('nextCard').innerHTML = `<div class="label">次の行動</div><div class="big">${trips.length ? 'これからの旅はありません' : '旅はまだありません'}</div>
+        <a class="btn" href="#/trip-new">＋ 新しい旅を作る</a>`;
+      return;
+    }
+    const ids = active.map((t) => t.id);
+    const since = new Date(Date.now() - 24 * 3600000).toISOString();
+    const [segR, evR] = await Promise.all([
+      sb.from('tabi_segments').select('*').in('trip_id', ids).is('deleted_at', null).eq('status', 'scheduled').or(`depart_at.gte.${since},arrive_at.gte.${since}`),
+      sb.from('tabi_events').select('*').in('trip_id', ids).is('deleted_at', null).eq('status', 'scheduled').or(`start_at.gte.${since},end_at.gte.${since}`),
+    ]);
+    if (segR.error || evR.error) throw segR.error || evR.error;
+    const byId = Object.fromEntries(active.map((t) => [t.id, t]));
+    const list = [
+      ...segR.data.map((x) => toAction({ kind: 'seg', row: x }, byId[x.trip_id])),
+      ...evR.data.map((x) => toAction({ kind: 'ev', row: x }, byId[x.trip_id])),
+    ].filter((a) => a.start).sort((a, b) => a.start.localeCompare(b.start));
+    const current = active.find((t) => t.start_date <= today && t.end_date >= today) || active[0];
+    homeActions = { list, trip: current };
+    renderNextCard();
+    clearInterval(homeTimer);
+    homeTimer = setInterval(() => { if (!$('viewHome').classList.contains('hidden')) renderNextCard(); }, 30000);
   } catch (e) { /* 通信できないときは前の表示のまま */ }
 }
 
