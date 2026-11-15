@@ -209,6 +209,16 @@
     </section>
   </div>
 
+  <!-- オフライン中に編集画面を開いたとき -->
+  <div id="viewOffline" class="hidden">
+    <section>
+      <h2>オフライン中です</h2>
+      <p>電波がないため、登録や編集はできません。電波のある所でもう一度開いてください。</p>
+      <p class="hint">旅程を見ることはできます（この端末に保存した内容を表示します）。</p>
+      <a class="btn sub" href="#/trips">旅の一覧へ</a>
+    </section>
+  </div>
+
   <!-- 招待リンクから参加 -->
   <div id="viewJoin" class="hidden">
     <section>
@@ -356,7 +366,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.9.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -397,12 +407,19 @@ function pushState() {
   if (Notification.permission === 'denied') return ['拒否されています', 'ng'];
   return ['要確認', 'warn'];
 }
+function syncLabel() {
+  const iso = localStorage.getItem('tabi.lastSyncAt'); if (!iso) return '—';
+  const d = new Date(iso); const hm = d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+function syncStale() { const iso = localStorage.getItem('tabi.lastSyncAt'); return !!iso && Date.now() - new Date(iso).getTime() > 6 * 3600000; }
 function renderStatus() {
   const online = navigator.onLine;
   const [ps, pc] = pushState();
   const tags = [
     online ? '' : '<span class="tag ng">オフライン中</span>',
-    `<span class="tag plain">最終同期 ${esc(localStorage.getItem('tabi.lastSync') || '—')}</span>`,
+    `<span class="tag plain">最終同期 ${esc(syncLabel())}</span>`,
+    user && syncStale() ? '<span class="tag warn">旅程が古い可能性があります</span>' : '',
     `<span class="tag ${pc}">通知：${ps}</span>`,
   ];
   $('statusBar').innerHTML = tags.join('');
@@ -441,6 +458,7 @@ function route() {
   $('loginInvite').classList.toggle('hidden', !localStorage.getItem('tabi.pendingInvite'));
   const view = !user ? 'login' : (VIEWS[v] && v !== 'login' ? v : 'home');
   for (const [name, id] of Object.entries(VIEWS)) $(id).classList.add('hidden');
+  $('viewOffline').classList.add('hidden');
   $(VIEWS[view]).classList.remove('hidden');
   $('tabs').classList.toggle('hidden', !user);
   const tab = (view.startsWith('trip') || view === 'seg' || view === 'ev' || view === 'join') ? 'trips' : view;
@@ -451,6 +469,11 @@ function route() {
   if (view === 'home') loadHome();
   if (view === 'trips') loadTrips();
   if (view === 'trip') loadTrip(arg);
+  // 電波がないときは編集の画面を開かない（オフライン中の編集と後からの同期は作らない設計）
+  if (!navigator.onLine && ['trip-new', 'trip-edit', 'seg', 'ev', 'join'].includes(view)) {
+    $(VIEWS[view]).classList.add('hidden'); $('viewOffline').classList.remove('hidden'); return;
+  }
+  $('viewOffline').classList.add('hidden');
   if (view === 'trip-new') openTripForm(null);
   if (view === 'trip-edit') openTripForm(arg);
   if (view === 'seg') openSegForm(arg, arg2);
@@ -458,8 +481,9 @@ function route() {
   if (view === 'join') openJoin(arg);
 }
 window.addEventListener('hashchange', route);
-window.addEventListener('online', renderStatus);
-window.addEventListener('offline', renderStatus);
+// 電波が戻ったら最新を取り直す（参加していない旅の保存もこのとき消す）。切れたら保存した旅程の表示に切り替える
+window.addEventListener('online', () => { renderStatus(); refreshUser().then(() => syncOffline(true)); });
+window.addEventListener('offline', () => { renderStatus(); route(); });
 
 // ---------- 旅 ----------
 const TZ_LIST = [
@@ -480,15 +504,92 @@ function fmtDate(s) {
 }
 function fmtRange(t) { return t.start_date === t.end_date ? fmtDate(t.start_date) : `${fmtDate(t.start_date)}〜${fmtDate(t.end_date)}`; }
 function markSynced() {
-  localStorage.setItem('tabi.lastSync', new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
+  localStorage.setItem('tabi.lastSyncAt', new Date().toISOString());
   renderStatus();
 }
 
+// ---------- 端末内の保存（オフライン閲覧用） ----------
+// 参加している旅の「旅・参加者名・移動・予定」だけを保存する。予約番号・確認コードは保存しない。
+const STALE_MS = 6 * 3600000; // 最終同期から6時間で「古い可能性」
+let offDb = null;
+function offOpen() {
+  if (offDb) return Promise.resolve(offDb);
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open('tabi-base', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('snap', { keyPath: 'key' });
+    r.onsuccess = () => { offDb = r.result; offDb.onversionchange = () => { offDb.close(); offDb = null; }; resolve(offDb); };
+    r.onerror = () => reject(r.error);
+  });
+}
+async function offTx(mode, fn) {
+  const db = await offOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('snap', mode); const st = tx.objectStore('snap'); let out;
+    Promise.resolve(fn(st, (v) => { out = v; })).catch(reject);
+    tx.oncomplete = () => resolve(out); tx.onerror = () => reject(tx.error);
+  });
+}
+async function offGet(key) {
+  try {
+    const v = await offTx('readonly', (st, set) => { const r = st.get(key); r.onsuccess = () => set(r.result); });
+    return v && v.uid === user?.id ? v : null; // 別のアカウントの保存は使わない
+  } catch { return null; }
+}
+async function offPutTrip(b) {
+  try { await offTx('readwrite', (st) => st.put({ key: 'trip:' + b.trip.id, uid: user.id, ...b })); } catch (e) { console.warn(e); }
+}
+async function offDelTrip(id) {
+  try { await offTx('readwrite', (st) => st.delete('trip:' + id)); } catch {}
+}
+function closeOffDb() { if (offDb) { offDb.close(); offDb = null; } }
+function isNetErr(e) { return !navigator.onLine || /Failed to fetch|NetworkError|Load failed|network/i.test(String(e?.message || e || '')); }
+const OFFLINE_NOTE = '<div class="msg warn">オフラインのため、この端末に保存した旅程を表示しています。予約番号は表示できません。編集は電波のある所でしてください。</div>';
+
+// 参加している旅を全部取り直して保存し、参加していない旅（退会・削除）の保存を消す
+let lastFullSync = 0;
+async function syncOffline(force = false) {
+  if (!user || !navigator.onLine || (!force && Date.now() - lastFullSync < 60000)) return;
+  lastFullSync = Date.now();
+  try {
+    const trips = await fetchMyTrips();
+    const ids = trips.map((t) => t.id);
+    const [mR, sR, eR] = ids.length ? await Promise.all([
+      sb.from('tabi_members').select('trip_id, user_id, role, display_name').in('trip_id', ids).order('joined_at'),
+      sb.from('tabi_segments').select('*').in('trip_id', ids).is('deleted_at', null),
+      sb.from('tabi_events').select('*').in('trip_id', ids).is('deleted_at', null),
+    ]) : [{ data: [] }, { data: [] }, { data: [] }];
+    if (mR.error || sR.error || eR.error) throw mR.error || sR.error || eR.error;
+    const { data: full, error } = ids.length ? await sb.from('tabi_trips').select('*').in('id', ids) : { data: [] };
+    if (error) throw error;
+    const pick = (rows, id) => rows.filter((x) => x.trip_id === id);
+    await offTx('readwrite', (st) => {
+      st.put({ key: 'trips', uid: user.id, trips });
+      for (const t of full) st.put({ key: 'trip:' + t.id, uid: user.id, trip: t, members: pick(mR.data, t.id), segs: pick(sR.data, t.id), evs: pick(eR.data, t.id) });
+      const keep = new Set(ids.map((id) => 'trip:' + id));
+      const r = st.getAllKeys();
+      r.onsuccess = () => { for (const k of r.result) if (String(k).startsWith('trip:') && !keep.has(k)) st.delete(k); };
+    });
+  } catch (e) { lastFullSync = 0; console.warn('同期できませんでした', e); }
+}
+async function clearOfflineData() {
+  closeOffDb();
+  await deleteLocalDb('tabi-base');
+  localStorage.removeItem('tabi.lastSyncAt'); localStorage.removeItem('tabi.offlineUser');
+}
+
+let tripsFromCache = false;
 async function fetchMyTrips() {
-  const { data, error } = await sb.from('tabi_trips')
+  // 電波がないと分かっているときは通信しない（通信ライブラリが何度も再試行して待たされるため）
+  const { data, error } = !navigator.onLine ? { error: new Error('offline') } : await sb.from('tabi_trips')
     .select('id, name, start_date, end_date, destination, timezone, deleted_at, tabi_members(user_id, role)')
     .is('deleted_at', null).order('start_date', { ascending: true });
+  if (error && isNetErr(error)) { // 電波がない：端末に保存した一覧を使う
+    const snap = await offGet('trips');
+    if (!snap) throw new Error('オフラインです。この端末にはまだ旅程が保存されていません。電波のある所で一度開いてください');
+    tripsFromCache = true; return snap.trips;
+  }
   if (error) throw error;
+  tripsFromCache = false;
   markSynced();
   return data.map((t) => ({ ...t, myRole: (t.tabi_members || []).find((m) => m.user_id === user.id)?.role }));
 }
@@ -506,6 +607,7 @@ async function loadTrips() {
     const past = trips.filter((t) => t.end_date < today).reverse();
     $('tripsUpcoming').innerHTML = up.length ? up.map(tripItem).join('') : '<p class="hint">これからの旅はありません。上のボタンから作れます。</p>';
     $('tripsPast').innerHTML = past.length ? past.map(tripItem).join('') : '<p class="hint">まだありません</p>';
+    if (tripsFromCache) $('tripsUpcoming').insertAdjacentHTML('afterbegin', OFFLINE_NOTE); else syncOffline();
   } catch (e) {
     $('tripsUpcoming').innerHTML = `<div class="msg ng">${esc(friendlyError(e))}</div>`;
   }
@@ -585,11 +687,20 @@ async function loadHome() {
     }
     const ids = active.map((t) => t.id);
     const since = new Date(Date.now() - 24 * 3600000).toISOString();
-    const [segR, evR] = await Promise.all([
-      sb.from('tabi_segments').select('*').in('trip_id', ids).is('deleted_at', null).eq('status', 'scheduled').or(`depart_at.gte.${since},arrive_at.gte.${since}`),
-      sb.from('tabi_events').select('*').in('trip_id', ids).is('deleted_at', null).eq('status', 'scheduled').or(`start_at.gte.${since},end_at.gte.${since}`),
-    ]);
-    if (segR.error || evR.error) throw segR.error || evR.error;
+    let segR, evR;
+    if (tripsFromCache) { // 電波がない：端末に保存した旅程から探す
+      const snaps = (await Promise.all(ids.map((id) => offGet('trip:' + id)))).filter(Boolean);
+      const ok = (x, a, b) => x.status === 'scheduled' && !x.deleted_at && [x[a], x[b]].some((v) => v && new Date(v) >= new Date(since));
+      segR = { data: snaps.flatMap((b) => b.segs).filter((x) => ok(x, 'depart_at', 'arrive_at')) };
+      evR = { data: snaps.flatMap((b) => b.evs).filter((x) => ok(x, 'start_at', 'end_at')) };
+    } else {
+      [segR, evR] = await Promise.all([
+        sb.from('tabi_segments').select('*').in('trip_id', ids).is('deleted_at', null).eq('status', 'scheduled').or(`depart_at.gte.${since},arrive_at.gte.${since}`),
+        sb.from('tabi_events').select('*').in('trip_id', ids).is('deleted_at', null).eq('status', 'scheduled').or(`start_at.gte.${since},end_at.gte.${since}`),
+      ]);
+      if (segR.error || evR.error) throw segR.error || evR.error;
+      syncOffline();
+    }
     const byId = Object.fromEntries(active.map((t) => [t.id, t]));
     const list = [
       ...segR.data.map((x) => toAction({ kind: 'seg', row: x }, byId[x.trip_id])),
@@ -608,17 +719,30 @@ async function loadTrip(id) {
   currentTrip = null;
   $('tripTitle').textContent = '読み込み中…'; $('tripInfo').innerHTML = ''; $('tripActions').innerHTML = '';
   $('tripMembers').innerHTML = ''; $('inviteBox').classList.add('hidden'); $('myNameBox').innerHTML = $('leaveBox').innerHTML = ''; show('tripMsg', ''); show('memberMsg', '');
-  const { data: t, error } = await sb.from('tabi_trips').select('*').eq('id', id).maybeSingle();
-  if (error || !t || t.deleted_at) {
-    $('tripTitle').textContent = '旅が見つかりません';
-    show('tripMsg', '削除されたか、参加していない旅です。', 'warn');
-    return;
+  const r = !navigator.onLine ? { error: new Error('offline') } : await sb.from('tabi_trips').select('*').eq('id', id).maybeSingle();
+  let t = r.data, members = [], offline = null;
+  if (r.error && isNetErr(r.error)) { // 電波がない：端末に保存した旅程を使う
+    offline = await offGet('trip:' + id);
+    if (!offline) {
+      $('tripTitle').textContent = '保存された旅程がありません';
+      return show('tripMsg', 'オフラインです。この旅はまだこの端末に保存されていません。電波のある所で一度開いてください', 'warn');
+    }
+    t = offline.trip; members = offline.members;
+    $('tripMsg').innerHTML = OFFLINE_NOTE;
+  } else {
+    if (r.error || !t || t.deleted_at) {
+      if (!r.error) offDelTrip(id); // 削除・退会した旅は端末からも消す
+      $('tripTitle').textContent = '旅が見つかりません';
+      show('tripMsg', '削除されたか、参加していない旅です。', 'warn');
+      return;
+    }
+    members = (await sb.from('tabi_members').select('user_id, role, display_name').eq('trip_id', id).order('joined_at')).data || [];
+    markSynced();
   }
-  const { data: members } = await sb.from('tabi_members').select('user_id, role, display_name').eq('trip_id', id).order('joined_at');
-  markSynced();
-  const me = (members || []).find((m) => m.user_id === user.id);
+  const me = members.find((m) => m.user_id === user.id);
   currentTrip = { ...t, myRole: me?.role };
-  loadSegs(t, ['owner', 'editor'].includes(me?.role));
+  const canEditNow = !offline && navigator.onLine && ['owner', 'editor'].includes(me?.role);
+  loadSegs(t, canEditNow, offline).then((d) => { if (d && !offline) offPutTrip({ trip: t, members, ...d }); });
   $('tripTitle').textContent = t.name;
   $('tripInfo').innerHTML = `<dl class="info">
     <dt>日程</dt><dd>${fmtRange(t)}</dd>
@@ -628,13 +752,13 @@ async function loadTrip(id) {
     <dt>あなた</dt><dd>${ROLE_NAME[me?.role] || ''}</dd>
     ${t.memo ? `<dt>メモ</dt><dd>${esc(t.memo).replace(/\n/g, '<br>')}</dd>` : ''}
   </dl>`;
-  const canEdit = ['owner', 'editor'].includes(me?.role);
+  const canEdit = canEditNow;
   $('tripActions').innerHTML =
     (canEdit ? `<a class="btn sub" href="#/trip-edit/${t.id}">旅の情報を編集する</a>` : '') +
-    (me?.role === 'owner' ? '<button class="danger" id="btnDeleteTrip">この旅を削除する</button>' : '');
+    (canEdit && me?.role === 'owner' ? '<button class="danger" id="btnDeleteTrip">この旅を削除する</button>' : '');
   if ($('btnDeleteTrip')) $('btnDeleteTrip').onclick = deleteTrip;
   if ($('scopeQuick')) $('scopeQuick').onchange = changeScope;
-  renderMembers(members || [], me);
+  renderMembers(members, me, !offline && navigator.onLine);
 }
 
 // 予約番号を見られる範囲（判定はサーバーのRLSで行う。ここは表示と切り替えだけ）
@@ -666,8 +790,8 @@ function armed(key) { // 危ない操作は5秒以内に2回押したときだ�
   if (memberArmed.key === key && Date.now() - memberArmed.at < 5000) { memberArmed = { key: '', at: 0 }; return true; }
   memberArmed = { key, at: Date.now() }; return false;
 }
-function renderMembers(members, me) {
-  const isOwner = me?.role === 'owner';
+function renderMembers(members, me, online = true) {
+  const isOwner = me?.role === 'owner' && online; // オフライン中は管理の操作を出さない
   $('tripMembers').innerHTML = members.map((m) => {
     const mine = m.user_id === user.id;
     const ctl = isOwner && !mine ? `<div class="two" style="margin-top:6px">
@@ -681,9 +805,9 @@ function renderMembers(members, me) {
       <div class="sm">${ROLE_NAME[m.role]}</div>${ctl}</div>`;
   }).join('');
   show('memberMsg', '');
-  $('myNameBox').innerHTML = me ? `<details><summary class="hint">この旅での自分の表示名を変える</summary>
+  $('myNameBox').innerHTML = me && online ? `<details><summary class="hint">この旅での自分の表示名を変える</summary>
     <input id="myName" maxlength="40" value="${esc(me.display_name || '')}"><button class="sub" id="btnMyName">表示名を保存</button></details>` : '';
-  $('leaveBox').innerHTML = !me ? '' : isOwner
+  $('leaveBox').innerHTML = !me || !online ? '' : isOwner
     ? '<p class="hint">作成者はこの旅から抜けられません。抜けたいときは、先にほかの参加者へ作成者を譲ってください。</p>'
     : '<button class="danger" id="btnLeave">この旅から抜ける</button>';
   for (const el of document.querySelectorAll('[data-role]')) el.onchange = () => changeRole(el.dataset.role, el.value, el);
@@ -978,10 +1102,10 @@ function segSummary(sg) {
 function localDateKey(iso, tz) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
 }
-async function loadSegs(trip, canEdit) {
+async function loadSegs(trip, canEdit, offline = null) {
   $('tripAddBtns').innerHTML = canEdit
     ? `<div class="two"><a class="btn" href="#/seg/${trip.id}/new">＋ 移動</a><a class="btn" href="#/ev/${trip.id}/new">＋ 予定</a></div>` : '';
-  const [segR, evR, secR] = await Promise.all([
+  const [segR, evR, secR] = offline ? [{ data: offline.segs }, { data: offline.evs }, { data: [] }] : await Promise.all([
     sb.from('tabi_segments').select('*').eq('trip_id', trip.id).is('deleted_at', null),
     sb.from('tabi_events').select('*').eq('trip_id', trip.id).is('deleted_at', null),
     // 予約番号は「表示」を押したときだけ取りに行く。ここでは、見られる人にだけ「ある」ことが分かる
@@ -994,7 +1118,8 @@ async function loadSegs(trip, canEdit) {
     ...segR.data.map((x) => ({ kind: 'seg', at: x.depart_at, tz: x.depart_tz, row: x })),
     ...evR.data.map((x) => ({ kind: 'ev', at: x.start_at, tz: x.timezone, row: x })),
   ].sort((a, b) => (a.at ? 0 : 1) - (b.at ? 0 : 1) || String(a.at).localeCompare(String(b.at)));
-  if (!items.length) { $('tripSegs').innerHTML = '<p class="hint">まだ移動や予定が登録されていません</p>'; return; }
+  const saved = { segs: segR.data, evs: evR.data }; // 端末に保存する分（予約番号は含めない）
+  if (!items.length) { $('tripSegs').innerHTML = '<p class="hint">まだ移動や予定が登録されていません</p>'; return saved; }
   let lastDay = null; const html = [];
   for (const it of items) {
     const day = it.at ? localDateKey(it.at, it.tz) : 'none';
@@ -1005,6 +1130,7 @@ async function loadSegs(trip, canEdit) {
     html.push(it.kind === 'seg' ? segItemHtml(it.row, trip, canEdit, hasSecret) : evItemHtml(it.row, trip, canEdit, hasSecret));
   }
   $('tripSegs').innerHTML = html.join('');
+  return saved;
 }
 function linkWrap(canEdit, href, body) {
   return canEdit ? `<a href="${href}" style="color:inherit;text-decoration:none;display:block">${body}</a>` : body;
@@ -1335,6 +1461,7 @@ async function clearDeviceData() {
     }
   } catch (e) { console.warn(e); }
   // 2) 端末内の旅程データ
+  closeOffDb();
   for (const name of LOCAL_DBS) await deleteLocalDb(name);
   // 3) 旅程のキャッシュ（画面の保存は残す）
   try { for (const k of await caches.keys()) if (k.startsWith('tabi-data')) await caches.delete(k); } catch {}
@@ -1368,6 +1495,13 @@ async function checkSub() {
 async function refreshUser() {
   const { data } = await sb.auth.getSession();
   user = data.session?.user ?? null;
+  if (user) localStorage.setItem('tabi.offlineUser', JSON.stringify({ id: user.id, email: user.email }));
+  else if (!navigator.onLine) {
+    // 電波がなくログインの更新ができないときは、前回ログインした人として保存した旅程だけ見られるようにする
+    try { user = JSON.parse(localStorage.getItem('tabi.offlineUser') || 'null'); } catch { user = null; }
+  } else if (localStorage.getItem('tabi.offlineUser')) {
+    await clearOfflineData(); // ログインが切れた端末に旅程を残さない
+  }
   $('who').textContent = user?.email ?? '';
   // ログインした直後、通知を許可済みならこの端末を通知先に登録し直す（ログアウトで消しているため）
   if (user && !regDone && swReg && 'Notification' in window && Notification.permission === 'granted' && navigator.onLine) {
@@ -1375,6 +1509,7 @@ async function refreshUser() {
   }
   await checkSub();
   route();
+  if (user && navigator.onLine) syncOffline();
 }
 sb.auth.onAuthStateChange(() => setTimeout(refreshUser, 0));
 
