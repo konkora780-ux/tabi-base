@@ -88,6 +88,9 @@
     font: inherit; width: 100%; min-height: 50px; padding: 10px 12px; border-radius: 10px;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink); margin: 4px 0;
   }
+  .nrow label { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; color: var(--ink); min-width: 0; }
+  .nrow input[type=checkbox] { width: 24px; height: 24px; min-width: 24px; margin: 0; padding: 0; appearance: auto; }
+  .nrow select { width: auto; flex: none; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .two > div { min-width: 0; }
   .two input { min-width: 0; }
@@ -193,6 +196,14 @@
       <div id="memberMsg"></div>
       <div id="myNameBox"></div>
       <div id="leaveBox"></div>
+    </section>
+    <section id="notifyBox" class="hidden">
+      <h2>通知</h2>
+      <div id="notifyRules"></div>
+      <div id="notifyMsg"></div>
+      <h3 class="hint">あなたへの次の通知</h3>
+      <div id="notifyNext" class="list"></div>
+      <p class="hint">通知は通信状況によって遅れたり届かなかったりすることがあります。大事な移動は時刻表やチケットでも確かめてください。</p>
     </section>
     <section id="inviteBox" class="hidden">
       <h2>同行者を招待する</h2>
@@ -366,7 +377,7 @@
 <script src="./lib/supabase-2.117.3.js"></script>
 <script>
 // ===== 設定（どちらも公開して問題ない値。秘密鍵はここに入れない） =====
-const APP_VERSION = '0.9.1';
+const APP_VERSION = '0.10.0';
 const SUPABASE_URL = 'https://hortngwcijhjagwmcoxo.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qy1V664U_HDLq_YEXkwo7w_fF6GpRBI';
 const FUNCTION_URL = SUPABASE_URL + '/functions/v1/tabi-push';
@@ -718,7 +729,7 @@ let currentTrip = null;
 async function loadTrip(id) {
   currentTrip = null;
   $('tripTitle').textContent = '読み込み中…'; $('tripInfo').innerHTML = ''; $('tripActions').innerHTML = '';
-  $('tripMembers').innerHTML = ''; $('inviteBox').classList.add('hidden'); $('myNameBox').innerHTML = $('leaveBox').innerHTML = ''; show('tripMsg', ''); show('memberMsg', '');
+  $('tripMembers').innerHTML = ''; $('inviteBox').classList.add('hidden'); $('notifyBox').classList.add('hidden'); $('myNameBox').innerHTML = $('leaveBox').innerHTML = ''; show('tripMsg', ''); show('memberMsg', '');
   const r = !navigator.onLine ? { error: new Error('offline') } : await sb.from('tabi_trips').select('*').eq('id', id).maybeSingle();
   let t = r.data, members = [], offline = null;
   if (r.error && isNetErr(r.error)) { // 電波がない：端末に保存した旅程を使う
@@ -759,6 +770,7 @@ async function loadTrip(id) {
   if ($('btnDeleteTrip')) $('btnDeleteTrip').onclick = deleteTrip;
   if ($('scopeQuick')) $('scopeQuick').onchange = changeScope;
   renderMembers(members, me, !offline && navigator.onLine);
+  if (!offline && navigator.onLine) loadNotify(t, canEdit); else $('notifyBox').classList.add('hidden');
 }
 
 // 予約番号を見られる範囲（判定はサーバーのRLSで行う。ここは表示と切り替えだけ）
@@ -782,6 +794,52 @@ async function changeScope() {
   }
   await loadTrip(currentTrip.id);
   show('tripMsg', scope === 'all' ? '予約番号を参加者全員（閲覧者も）が見られるようにしました' : '予約番号を作成者と編集者だけが見られるようにしました');
+}
+
+// ---------- 通知の設定（旅ごと。変えると送信予定はサーバーで自動的に作り直される） ----------
+const NOTIFY_KINDS = [
+  { kind: 'day_before', name: '前日夜', def: 1200, unit: 'time', opts: [1080, 1140, 1200, 1260, 1320] },
+  { kind: 'prep', name: '出発準備（その日最初）', def: 90, unit: 'min', opts: [60, 90, 120] },
+  { kind: 'depart', name: '出発前', def: 30, unit: 'min', opts: [15, 30, 45, 60] },
+  { kind: 'arrive', name: '到着予定', def: 10, unit: 'min', opts: [5, 10, 15, 20] },
+];
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const optLabel = (k, v) => k.unit === 'time' ? `前日の${hhmm(v)}` : `${v}分前`;
+async function loadNotify(trip, canEdit) {
+  $('notifyBox').classList.remove('hidden'); show('notifyMsg', '');
+  const [rR, nR] = await Promise.all([
+    sb.from('tabi_notification_rules').select('kind, minutes, enabled').eq('trip_id', trip.id),
+    sb.from('tabi_notifications').select('title, send_at').eq('trip_id', trip.id).eq('status', 'scheduled')
+      .gte('send_at', new Date(Date.now() - 60000).toISOString()).order('send_at').limit(5),
+  ]);
+  if (currentTrip?.id !== trip.id) return;
+  const rules = Object.fromEntries((rR.data || []).map((r) => [r.kind, r]));
+  $('notifyRules').innerHTML = NOTIFY_KINDS.map((k) => {
+    const r = rules[k.kind] || {}; const on = r.enabled !== false; const v = r.minutes ?? k.def;
+    const opts = k.opts.includes(v) ? k.opts : [...k.opts, v].sort((a, b) => a - b);
+    return `<div class="row nrow"><label><input type="checkbox" data-nk="${k.kind}"${on ? ' checked' : ''}${canEdit ? '' : ' disabled'}> ${k.name}</label>
+      <select data-nm="${k.kind}"${canEdit ? '' : ' disabled'}>${opts.map((o) => `<option value="${o}"${o === v ? ' selected' : ''}>${optLabel(k, o)}</option>`).join('')}</select></div>`;
+  }).join('') + (canEdit ? '<button class="sub" id="btnSaveNotify">通知の設定を保存</button>'
+    : '<p class="hint">通知の設定を変えられるのは作成者と編集者です。</p>');
+  if ($('btnSaveNotify')) $('btnSaveNotify').onclick = () => saveNotify(trip);
+  const fmt = (iso) => new Date(iso).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  $('notifyNext').innerHTML = (nR.data || []).length
+    ? nR.data.map((n) => `<div class="item"><div class="sm">${esc(fmt(n.send_at))}</div><div>${esc(n.title)}</div></div>`).join('')
+    : '<p class="hint">予定されている通知はありません</p>';
+}
+async function saveNotify(trip) {
+  const rows = NOTIFY_KINDS.map((k) => ({
+    trip_id: trip.id, kind: k.kind,
+    enabled: document.querySelector(`[data-nk="${k.kind}"]`).checked,
+    minutes: Number(document.querySelector(`[data-nm="${k.kind}"]`).value),
+    updated_at: new Date().toISOString(),
+  }));
+  $('btnSaveNotify').disabled = true;
+  const { error } = await sb.from('tabi_notification_rules').upsert(rows, { onConflict: 'trip_id,kind' });
+  $('btnSaveNotify').disabled = false;
+  if (error) return show('notifyMsg', '保存できませんでした：' + esc(friendlyError(error)), 'ng');
+  await loadNotify(trip, true);
+  show('notifyMsg', '保存しました。参加者全員の通知の予定を作り直しました');
 }
 
 // ---------- 参加者・招待 ----------
